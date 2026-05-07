@@ -137,11 +137,15 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     // MARK: - Tap + Aggregate Device Setup
 
     private func createTapAndAggregateDevice() throws {
-        // Tap all system audio output, excluding our own process
-        // CATapDescription takes AudioObjectIDs from kAudioHardwarePropertyProcessObjectList,
-        // NOT raw PIDs. Look up our process's AudioObjectID to exclude self.
-        let excludeList: [AudioObjectID] = Self.currentProcessAudioObjectID().map { [$0] } ?? []
-        let tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: excludeList)
+        // Tap the default output device directly rather than the stereo global mix.
+        // Native call clients (Zoom, Teams) route audio through private pipelines
+        // (virtual devices, custom AudioUnits for AEC/noise suppression) that bypass
+        // the system's stereo mix. A device-level tap captures all audio flowing
+        // through the output device regardless of which app or pipeline produces it.
+        guard let outputDeviceID = Self.defaultOutputDeviceID() else {
+            throw RecorderError.noDefaultOutputDevice
+        }
+        let tapDesc = CATapDescription(stereoAudioDeviceTap: outputDeviceID)
         tapDesc.name = "Muesli System Audio Tap"
 
         // Register the tap with the audio system first — this triggers the
@@ -375,12 +379,10 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
     // MARK: - Permission
 
     /// Check whether system audio capture permission (`kTCCServiceAudioCapture`)
-    /// is granted by attempting to create a process tap with self-exclusion.
-    /// An empty exclude list bypasses the permission check entirely — only
-    /// non-empty lists (process filtering) require `kTCCServiceAudioCapture`.
+    /// is granted by attempting to create a device tap on the default output device.
     static func checkSystemAudioPermission() -> Bool {
-        guard let selfObjectID = currentProcessAudioObjectID() else { return false }
-        let tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: [selfObjectID])
+        guard let outputDeviceID = defaultOutputDeviceID() else { return false }
+        let tapDesc = CATapDescription(stereoAudioDeviceTap: outputDeviceID)
         tapDesc.name = "Muesli Permission Check"
 
         var testTapID: AudioObjectID = kAudioObjectUnknown
@@ -390,6 +392,23 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
             return true
         }
         return false
+    }
+
+    /// Look up the default audio output device ID.
+    private static func defaultOutputDeviceID() -> AudioDeviceID? {
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID
+        ) == noErr, deviceID != 0 else {
+            return nil
+        }
+        return deviceID
     }
 
     /// Look up our process's AudioObjectID from the HAL process object list.
@@ -516,6 +535,7 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
 
     enum RecorderError: LocalizedError {
         case fileCreationFailed
+        case noDefaultOutputDevice
         case tapCreationFailed(OSStatus)
         case aggregateDeviceCreationFailed(OSStatus)
         case auhalNotFound
@@ -525,6 +545,8 @@ final class CoreAudioSystemRecorder: SystemAudioCapturing {
             switch self {
             case .fileCreationFailed:
                 return "Could not create output file"
+            case .noDefaultOutputDevice:
+                return "No default audio output device found"
             case .tapCreationFailed(let s):
                 return "Process tap creation failed (status: \(s))"
             case .aggregateDeviceCreationFailed(let s):

@@ -406,6 +406,87 @@ struct TranscriptFormatterTests {
         #expect(result.contains("Speaker 3: Charlie talks"))
     }
 
+    // MARK: - Source Attribution (Issue #97)
+
+    @Test("system audio segments are never labelled as You")
+    func systemAudioNeverLabelledAsYou() {
+        let meetingStart = Date(timeIntervalSince1970: 0)
+        let system = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "Can everyone hear me?"),
+            SpeechSegment(start: 3.0, end: 5.0, text: "Let's discuss the agenda"),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: [], systemSegments: system, meetingStart: meetingStart
+        )
+        // System audio must be labelled "Others", never "You"
+        #expect(!result.contains("You:"))
+        #expect(result.contains("Others: Can everyone hear me?"))
+        #expect(result.contains("Others: Let's discuss the agenda"))
+    }
+
+    @Test("mic and system audio maintain correct labels when interleaved")
+    func micAndSystemMaintainCorrectLabels() {
+        let meetingStart = Date(timeIntervalSince1970: 0)
+        let mic = [
+            SpeechSegment(start: 0.0, end: 1.0, text: "Hello"),
+            SpeechSegment(start: 4.0, end: 5.0, text: "Goodbye"),
+        ]
+        let system = [
+            SpeechSegment(start: 2.0, end: 3.0, text: "Hi there"),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic, systemSegments: system, meetingStart: meetingStart
+        )
+        let lines = result.components(separatedBy: "\n")
+        #expect(lines.count == 3)
+        #expect(lines[0].contains("You: Hello"))
+        #expect(lines[1].contains("Others: Hi there"))
+        #expect(lines[2].contains("You: Goodbye"))
+        // No system segment should be labelled as "You"
+        for line in lines where line.contains("Hi there") {
+            #expect(!line.hasPrefix("[") || line.contains("Others:"))
+        }
+    }
+
+    @Test("system audio with diarization never falls back to You label")
+    func systemAudioWithDiarizationNeverYou() {
+        let meetingStart = Date(timeIntervalSince1970: 0)
+        let system = [
+            SpeechSegment(start: 0.0, end: 3.0, text: "Remote speaker talking"),
+        ]
+        let diarization = [
+            makeDiarSeg(speakerId: "spk_0", start: 0.0, end: 3.5),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: [],
+            systemSegments: system,
+            diarizationSegments: diarization,
+            meetingStart: meetingStart
+        )
+        // Must use diarized speaker label, not "You"
+        #expect(!result.contains("You:"))
+        #expect(result.contains("Speaker 1: Remote speaker talking"))
+    }
+
+    @Test("all system segments labelled as Others when no diarization available")
+    func allSystemSegmentsLabelledOthers() {
+        let meetingStart = Date(timeIntervalSince1970: 0)
+        // Simulate a meeting with only system audio (e.g., listening to a call)
+        let system = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "First point"),
+            SpeechSegment(start: 2.5, end: 4.0, text: "Second point"),
+            SpeechSegment(start: 5.0, end: 7.0, text: "Third point"),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: [], systemSegments: system, meetingStart: meetingStart
+        )
+        let lines = result.components(separatedBy: "\n")
+        for line in lines {
+            #expect(!line.contains("You:"), "System audio should never be labelled as You: \(line)")
+        }
+        #expect(lines.allSatisfy { $0.contains("Others:") })
+    }
+
     // MARK: - Helpers
 
     private func makeDiarSeg(speakerId: String, start: Float, end: Float) -> TimedSpeakerSegment {
