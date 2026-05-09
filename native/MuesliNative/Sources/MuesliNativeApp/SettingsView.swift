@@ -492,7 +492,7 @@ struct SettingsView: View {
                     settingsRow("Model", controlWidth: meetingControlWidth) {
                         settingsModelTextField(
                             currentModel: appState.config.ollamaModel,
-                            placeholder: "llama3.2"
+                            placeholder: "qwen3.5"
                         ) { val in controller.updateConfig { $0.ollamaModel = val } }
                     }
                 } else {

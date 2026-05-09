@@ -376,7 +376,7 @@ struct AppConfigTests {
         #expect(config.openAIAPIKey.isEmpty)
         #expect(config.openRouterAPIKey.isEmpty)
         #expect(config.ollamaURL == "http://localhost:11434")
-        #expect(config.ollamaModel.isEmpty)
+        #expect(config.ollamaModel == "qwen3.5")
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == true)

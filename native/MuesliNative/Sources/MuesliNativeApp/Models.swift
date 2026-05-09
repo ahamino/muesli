@@ -609,7 +609,7 @@ struct AppConfig: Codable {
     var openRouterModel: String = ""
     var chatGPTModel: String = ""
     var ollamaURL: String = "http://localhost:11434"
-    var ollamaModel: String = ""
+    var ollamaModel: String = "qwen3.5"
     var summaryModel: String = ""
     var meetingSummaryModel: String = ""
     var hasCompletedOnboarding: Bool = false
