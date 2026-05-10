@@ -379,7 +379,8 @@ struct AppConfigTests {
         #expect(config.ollamaModel == "qwen3.5")
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
-        #expect(config.enableComputerUseHotkey == true)
+        #expect(config.enableComputerUseHotkey == false)
+        #expect(config.computerUseHotkeyDefaultDisabledMigrationApplied == true)
         #expect(config.enableComputerUsePlanner == true)
         #expect(config.computerUsePlannerModel.isEmpty)
         #expect(config.computerUseTimeoutSeconds == 120)
@@ -462,6 +463,7 @@ struct AppConfigTests {
         #expect(json["stt_model"] != nil)
         #expect(json["computer_use_hotkey"] != nil)
         #expect(json["enable_computer_use_hotkey"] != nil)
+        #expect(json["computer_use_hotkey_default_disabled_migration_applied"] != nil)
         #expect(json["enable_computer_use_planner"] != nil)
         #expect(json["computer_use_planner_model"] != nil)
         #expect(json["computer_use_timeout_seconds"] != nil)
@@ -501,7 +503,8 @@ struct AppConfigTests {
         #expect(config.mutedMeetingDetectionAppBundleIDs.isEmpty)
         #expect(config.customMeetingTemplates.isEmpty)
         #expect(config.computerUseHotkey == .computerUseDefault)
-        #expect(config.enableComputerUseHotkey == true)
+        #expect(config.enableComputerUseHotkey == false)
+        #expect(config.computerUseHotkeyDefaultDisabledMigrationApplied == true)
         #expect(config.enableComputerUsePlanner == true)
         #expect(config.computerUsePlannerModel.isEmpty)
         #expect(config.computerUseTimeoutSeconds == 120)
@@ -525,7 +528,38 @@ struct AppConfigTests {
 
         #expect(config.dictationHotkey == HotkeyConfig(keyCode: 54, label: "Right Cmd"))
         #expect(config.computerUseHotkey == .default)
+        #expect(config.enableComputerUseHotkey == false)
+    }
+
+    @Test("legacy computer use hotkey enabled config is disabled once")
+    func legacyComputerUseHotkeyEnabledConfigIsDisabledOnce() throws {
+        let json = """
+        {
+          "enable_computer_use_hotkey": true,
+          "enable_computer_use_planner": true
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.enableComputerUseHotkey == false)
+        #expect(config.computerUseHotkeyDefaultDisabledMigrationApplied == true)
+        #expect(config.enableComputerUsePlanner == true)
+    }
+
+    @Test("computer use hotkey remains enabled after migration is applied")
+    func computerUseHotkeyRemainsEnabledAfterMigrationIsApplied() throws {
+        let json = """
+        {
+          "enable_computer_use_hotkey": true,
+          "computer_use_hotkey_default_disabled_migration_applied": true
+        }
+        """
+
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
         #expect(config.enableComputerUseHotkey == true)
+        #expect(config.computerUseHotkeyDefaultDisabledMigrationApplied == true)
     }
 
     @Test("unsupported onboarding use case falls back to dictation")
