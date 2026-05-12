@@ -473,7 +473,7 @@ struct MeetingsNavigationTests {
         let controller = makeController()
 
         controller.selectBackend(.parakeetEnglish)
-        controller.selectMeetingTranscriptionBackend(.whisperLargeTurbo)
+        controller.selectMeetingTranscriptionBackend(.whisperLargeTurbo, requireDownloaded: false)
 
         #expect(controller.appState.selectedBackend == .parakeetEnglish)
         #expect(controller.appState.selectedMeetingTranscriptionBackend == .whisperLargeTurbo)
