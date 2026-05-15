@@ -713,6 +713,19 @@ final class MuesliController: NSObject {
         updateMeetingNotificationVisibility()
     }
 
+    func updateUpcomingMeetingsWindow(dayCount: Int) {
+        let resolvedDayCount = UpcomingMeetingsWindow.resolve(dayCount: dayCount).dayCount
+        guard config.upcomingMeetingsDayCount != resolvedDayCount else { return }
+
+        updateConfig { $0.upcomingMeetingsDayCount = resolvedDayCount }
+        googleCalClient.resetSync()
+        Task {
+            await refreshUpcomingCalendarEvents()
+            checkUpcomingCalendarNotifications()
+            meetingMonitor.refreshState(trigger: .calendarChanged)
+        }
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
         let result = launchAtLoginCoordinator.setEnabled(enabled, config: config)
         if let error = result.error {
@@ -1055,12 +1068,13 @@ final class MuesliController: NSObject {
 
     func refreshUpcomingCalendarEvents() async {
         let disabledIDs = Set(config.disabledCalendarIDs)
-        var ekEvents = calendarMonitor.upcomingEvents(daysAhead: 7, disabledCalendarIDs: disabledIDs)
+        let dayCount = UpcomingMeetingsWindow.resolve(dayCount: config.upcomingMeetingsDayCount).dayCount
+        var ekEvents = calendarMonitor.upcomingEvents(daysAhead: dayCount, disabledCalendarIDs: disabledIDs)
 
         if googleCalAuth.isAuthenticated {
             do {
                 let googleEvents = try await googleCalClient.fetchUpcomingEvents(
-                    daysAhead: 7,
+                    daysAhead: dayCount,
                     disabledCalendarIDs: disabledIDs
                 )
                 ekEvents = GoogleCalendarClient.mergeEvents(eventKit: ekEvents, google: googleEvents)

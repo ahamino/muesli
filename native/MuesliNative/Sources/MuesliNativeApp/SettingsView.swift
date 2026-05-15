@@ -124,6 +124,10 @@ struct SettingsView: View {
         appState.config.resolvedCohereLanguage
     }
 
+    private var selectedUpcomingMeetingsWindow: UpcomingMeetingsWindow {
+        UpcomingMeetingsWindow.resolve(dayCount: appState.config.upcomingMeetingsDayCount)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
@@ -627,6 +631,17 @@ struct SettingsView: View {
             }
 
             settingsSection("Calendars") {
+                settingsRow("Upcoming meetings", controlWidth: meetingControlWidth) {
+                    settingsMenu(
+                        selection: selectedUpcomingMeetingsWindow.label,
+                        options: UpcomingMeetingsWindow.allCases.map(\.label)
+                    ) { label in
+                        guard let window = UpcomingMeetingsWindow.allCases.first(where: { $0.label == label }) else { return }
+                        controller.updateUpcomingMeetingsWindow(dayCount: window.dayCount)
+                    }
+                }
+                settingsDescription("Controls how many calendar days appear in Coming Up, the menu bar, and scheduled meeting checks.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 calendarSourcesControl
             }
 

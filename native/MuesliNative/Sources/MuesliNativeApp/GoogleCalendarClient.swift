@@ -78,9 +78,12 @@ final class GoogleCalendarClient {
     /// call so newly-added calendars show up; per-calendar sync tokens keep
     /// each event fetch incremental.
     func fetchUpcomingEvents(
-        daysAhead: Int = 7,
+        daysAhead: Int = UpcomingMeetingsWindow.defaultDayCount,
         disabledCalendarIDs: Set<String> = []
     ) async throws -> [UnifiedCalendarEvent] {
+        let now = Date()
+        guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: daysAhead) else { return [] }
+
         // Refresh the calendar list. If this fails, fall back to whatever we
         // last saw — better to return something than nothing.
         do {
@@ -119,10 +122,9 @@ final class GoogleCalendarClient {
             }
         }
 
-        let now = Date()
         let merged = cachedEventsByCalendar.values
             .flatMap { $0.values }
-            .filter { $0.endDate > now }
+            .filter { $0.endDate > now && $0.startDate < future }
         return merged.sorted { $0.startDate < $1.startDate }
     }
 
@@ -147,7 +149,7 @@ final class GoogleCalendarClient {
                 components.queryItems = [URLQueryItem(name: "syncToken", value: syncToken)]
             } else {
                 let now = Date()
-                guard let future = Calendar.current.date(byAdding: .day, value: daysAhead, to: now) else { return }
+                guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: daysAhead) else { return }
                 components.queryItems = [
                     URLQueryItem(name: "timeMin", value: isoFormatter.string(from: now)),
                     URLQueryItem(name: "timeMax", value: isoFormatter.string(from: future)),
