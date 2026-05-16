@@ -2122,6 +2122,15 @@ final class MuesliController: NSObject {
         syncAppState()
     }
 
+    func updateMeetingTranscript(id: Int64, transcript: String) {
+        do {
+            try dictationStore.updateMeetingTranscript(id: id, rawTranscript: transcript)
+        } catch {
+            fputs("[muesli-native] failed to update meeting transcript \(id): \(error)\n", stderr)
+        }
+        syncAppState()
+    }
+
     func updateMeetingManualNotes(id: Int64, notes: String) {
         liveManualNotesPersistWorkItems[id]?.cancel()
         liveManualNotesPersistWorkItems[id] = nil
@@ -2846,29 +2855,97 @@ final class MuesliController: NSObject {
         NSWorkspace.shared.open(meetingURL)
     }
 
+    enum MeetingDiscardResolution: Equatable {
+        case discardRecording
+        case keepManualNotes
+        case deleteDraft
+    }
+
+    private struct MeetingDiscardAccessory {
+        let view: NSView
+        let manualNotesCheckbox: NSButton
+    }
+
+    private final class MeetingDiscardAccessoryView: NSView {
+        var titleUpdater: AnyObject?
+    }
+
+    private final class MeetingDiscardButtonTitleUpdater: NSObject {
+        weak var discardButton: NSButton?
+
+        init(discardButton: NSButton?) {
+            self.discardButton = discardButton
+        }
+
+        @MainActor @objc func manualNotesCheckboxChanged(_ sender: NSButton) {
+            discardButton?.title = sender.state == .on ? "Discard" : "Discard Recording"
+        }
+    }
+
     @objc func discardMeetingWithConfirmation() {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
+        let hasManualNotes = activeMeetingID.map { id in
+            !manualNotesForLiveMeeting(id: id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } ?? false
         alert.messageText = "Discard recording?"
-        alert.informativeText = "This will stop the meeting recording and delete all captured audio. This cannot be undone."
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Discard")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons.first?.hasDestructiveAction = true
-        presentDiscardMeetingAlert(alert)
+        var manualNotesCheckbox: NSButton?
+        if hasManualNotes {
+            alert.informativeText = "This will stop the meeting. Choose whether to delete the written notes too."
+            let accessory = Self.makeDiscardMeetingAccessoryView()
+            manualNotesCheckbox = accessory.manualNotesCheckbox
+            alert.accessoryView = accessory.view
+            alert.addButton(withTitle: "Discard Recording")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+            let titleUpdater = MeetingDiscardButtonTitleUpdater(discardButton: alert.buttons.first)
+            manualNotesCheckbox?.target = titleUpdater
+            manualNotesCheckbox?.action = #selector(MeetingDiscardButtonTitleUpdater.manualNotesCheckboxChanged(_:))
+            (accessory.view as? MeetingDiscardAccessoryView)?.titleUpdater = titleUpdater
+        } else {
+            alert.informativeText = "This will stop the meeting recording and delete all captured audio. This cannot be undone."
+            alert.addButton(withTitle: "Discard")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons.first?.hasDestructiveAction = true
+        }
+        presentDiscardMeetingAlert(alert, manualNotesCheckbox: manualNotesCheckbox)
     }
 
-    private func presentDiscardMeetingAlert(_ alert: NSAlert, attempt: Int = 0) {
+    private static func makeDiscardMeetingAccessoryView() -> MeetingDiscardAccessory {
+        let label = NSTextField(labelWithString: "Will delete:")
+        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+        label.textColor = .secondaryLabelColor
+
+        let recordingCheckbox = NSButton(checkboxWithTitle: "Recording audio", target: nil, action: nil)
+        recordingCheckbox.state = .on
+        recordingCheckbox.isEnabled = false
+
+        let notesCheckbox = NSButton(checkboxWithTitle: "Manual notes", target: nil, action: nil)
+        notesCheckbox.state = .off
+
+        let container = MeetingDiscardAccessoryView(frame: NSRect(x: 0, y: 0, width: 230, height: 76))
+        let stack = NSStackView(views: [label, recordingCheckbox, notesCheckbox])
+        stack.frame = container.bounds
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.autoresizingMask = [.width, .height]
+        container.addSubview(stack)
+        return MeetingDiscardAccessory(view: container, manualNotesCheckbox: notesCheckbox)
+    }
+
+    private func presentDiscardMeetingAlert(_ alert: NSAlert, manualNotesCheckbox: NSButton?, attempt: Int = 0) {
         if let window = confirmationAnchorWindow() {
-            beginDiscardMeetingAlert(alert, for: window)
+            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox)
             return
         }
 
         showActiveMeetingDocumentIfNeeded()
         historyWindowController?.show()
         if let window = confirmationAnchorWindow() {
-            beginDiscardMeetingAlert(alert, for: window)
+            beginDiscardMeetingAlert(alert, for: window, manualNotesCheckbox: manualNotesCheckbox)
             return
         }
 
@@ -2879,17 +2956,28 @@ final class MuesliController: NSObject {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, alert] in
-            self?.presentDiscardMeetingAlert(alert, attempt: attempt + 1)
+            self?.presentDiscardMeetingAlert(alert, manualNotesCheckbox: manualNotesCheckbox, attempt: attempt + 1)
         }
     }
 
-    private func beginDiscardMeetingAlert(_ alert: NSAlert, for window: NSWindow) {
+    private func beginDiscardMeetingAlert(_ alert: NSAlert, for window: NSWindow, manualNotesCheckbox: NSButton?) {
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
+            guard let resolution = Self.discardResolution(
+                for: response,
+                deleteManualNotes: manualNotesCheckbox.map { $0.state == .on }
+            ) else { return }
             Task { @MainActor [weak self] in
-                self?.discardMeetingRecording()
+                self?.discardMeetingRecording(resolution: resolution)
             }
         }
+    }
+
+    static func discardResolution(for response: NSApplication.ModalResponse, deleteManualNotes: Bool?) -> MeetingDiscardResolution? {
+        guard response == .alertFirstButtonReturn else { return nil }
+        if let deleteManualNotes {
+            return deleteManualNotes ? .deleteDraft : .keepManualNotes
+        }
+        return .discardRecording
     }
 
     private func confirmationAnchorWindow() -> NSWindow? {
@@ -2905,29 +2993,33 @@ final class MuesliController: NSObject {
         }
     }
 
-    func discardMeetingRecording() {
+    private func discardMeetingRecording(resolution: MeetingDiscardResolution = .discardRecording) {
         guard let sessionToDiscard = activeMeetingSession else {
             // Fallback recovery: reset indicator if session is nil
             guard !isStartingMeetingRecording else { return }
             disarmMeetingAutoStop()
             indicator.setMeetingRecording(false, config: config)
-            if let activeMeetingID {
-                resolveLiveMeetingAfterDiscard(id: activeMeetingID)
-                self.activeMeetingID = nil
+            if let meetingID = activeMeetingID {
+                activeMeetingID = nil
+                resolveLiveMeetingAfterDiscard(id: meetingID, resolution: resolution)
+            } else {
+                finishDiscardMeetingRecording()
             }
-            isStoppingMeetingRecording = false
-            endMeetingActivity()
-            setState(.idle)
             return
         }
         sessionToDiscard.discard()
         disarmMeetingAutoStop()
         self.activeMeetingSession = nil
         indicator.setMeetingRecording(false, config: config)
-        if let activeMeetingID {
-            resolveLiveMeetingAfterDiscard(id: activeMeetingID)
-            self.activeMeetingID = nil
+        if let meetingID = activeMeetingID {
+            activeMeetingID = nil
+            resolveLiveMeetingAfterDiscard(id: meetingID, resolution: resolution)
+        } else {
+            finishDiscardMeetingRecording()
         }
+    }
+
+    private func finishDiscardMeetingRecording() {
         isStoppingMeetingRecording = false
         endMeetingActivity()
         meetingMonitor.resumeAfterCooldown()
@@ -2938,45 +3030,43 @@ final class MuesliController: NSObject {
         updateMeetingNotificationVisibility()
     }
 
-    private func resolveLiveMeetingAfterDiscard(id: Int64) {
-        let manualNotes = manualNotesForLiveMeeting(id: id)
-        if manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? dictationStore.deleteMeeting(id: id)
-            clearCachedMeetingManualNotes(id: id)
-            clearCachedMeetingTitle(id: id)
-            if appState.selectedMeetingID == id {
-                appState.selectedMeetingID = nil
-                appState.selectedMeetingRecord = nil
-                appState.meetingsNavigationState = .browser
+    private func resolveLiveMeetingAfterDiscard(id: Int64, resolution: MeetingDiscardResolution) {
+        switch resolution {
+        case .keepManualNotes:
+            keepManualNotesAfterDiscard(id: id)
+        case .deleteDraft:
+            deleteManualNotesDraftAfterDiscard(id: id)
+        case .discardRecording:
+            let manualNotes = manualNotesForLiveMeeting(id: id)
+            if manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                deleteManualNotesDraftAfterDiscard(id: id)
+            } else {
+                // Defensive fallback: the UI routes manual-note meetings through
+                // explicit Keep Notes/Delete Draft choices. If notes appear after
+                // the simpler discard alert was built, preserve user-written text.
+                keepManualNotesAfterDiscard(id: id)
             }
-            syncAppState()
-            return
         }
+        finishDiscardMeetingRecording()
+    }
 
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Keep manual notes?"
-        alert.informativeText = "This recording will be discarded, but this meeting has manually written notes. Keep them as a note-only meeting or delete the draft?"
-        alert.addButton(withTitle: "Keep Notes")
-        alert.addButton(withTitle: "Delete Draft")
-        alert.buttons.dropFirst().first?.hasDestructiveAction = true
-        if alert.runModal() == .alertFirstButtonReturn {
-            flushCachedMeetingTitle(id: id)
-            flushCachedMeetingManualNotes(id: id, sync: false)
-            try? dictationStore.updateMeetingStatus(id: id, status: .noteOnly)
-            clearCachedMeetingManualNotes(id: id)
-            clearCachedMeetingTitle(id: id)
-        } else {
-            try? dictationStore.deleteMeeting(id: id)
-            clearCachedMeetingManualNotes(id: id)
-            clearCachedMeetingTitle(id: id)
-            if appState.selectedMeetingID == id {
-                appState.selectedMeetingID = nil
-                appState.selectedMeetingRecord = nil
-                appState.meetingsNavigationState = .browser
-            }
+    private func deleteManualNotesDraftAfterDiscard(id: Int64) {
+        try? dictationStore.deleteMeeting(id: id)
+        clearCachedMeetingManualNotes(id: id)
+        clearCachedMeetingTitle(id: id)
+        if appState.selectedMeetingID == id {
+            appState.selectedMeetingID = nil
+            appState.selectedMeetingRecord = nil
+            appState.meetingsNavigationState = .browser
         }
-        syncAppState()
+    }
+
+    private func keepManualNotesAfterDiscard(id: Int64) {
+        flushCachedMeetingTitle(id: id)
+        flushCachedMeetingManualNotes(id: id, sync: false)
+        try? dictationStore.updateMeetingStatus(id: id, status: .noteOnly)
+        clearCachedMeetingManualNotes(id: id)
+        clearCachedMeetingTitle(id: id)
     }
 
     private func resolveLiveMeetingAfterStartFailure(id: Int64) {
