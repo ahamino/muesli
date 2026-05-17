@@ -138,11 +138,11 @@ final class HotkeyMonitor {
     }
 
     private func finishActiveSessionBeforeReconfigure() {
-        guard targetKeyDown || armed || prepared || active || toggleActive else { return }
+        guard targetKeyDown || armed || prepared || active || toggleActive || armCancelWorkItem != nil else { return }
 
         let wasToggleActive = toggleActive
         let wasActive = active
-        let wasPreparedOrArmed = prepared || armed
+        let shouldCancel = prepared || armed || armCancelWorkItem != nil
 
         targetKeyDown = false
         otherKeyPressed = false
@@ -158,7 +158,7 @@ final class HotkeyMonitor {
             onToggleStop?()
         } else if wasActive {
             onStop?()
-        } else if wasPreparedOrArmed {
+        } else if shouldCancel {
             onCancel?()
         }
     }

@@ -1075,6 +1075,26 @@ struct HotkeyMonitorTests {
         #expect(cancelCount == 0)
         #expect(monitor.targetKeyCode == 56)
     }
+
+    @Test("reconfiguring hotkey during pending double tap cancel cancels cleanly")
+    @MainActor
+    func configureKeyCodeDuringPendingDoubleTapCancelCancelsCleanly() async throws {
+        let monitor = HotkeyMonitor(doubleTapWindow: 0.35)
+        monitor.configureTriggerThreshold(milliseconds: 75)
+        var cancelCount = 0
+        monitor.onArm = {}
+        monitor.onCancel = {
+            cancelCount += 1
+        }
+
+        monitor.handleFlagsChanged(keyCode: 55, flags: .command)
+        monitor.handleFlagsChanged(keyCode: 55, flags: [])
+        monitor.configure(keyCode: 56)
+        try await Task.sleep(for: .milliseconds(380))
+
+        #expect(cancelCount == 1)
+        #expect(monitor.targetKeyCode == 56)
+    }
 }
 
 @Suite("MeetingResummarizationPolicy")
