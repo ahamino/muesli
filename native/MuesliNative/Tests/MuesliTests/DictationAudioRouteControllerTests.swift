@@ -21,23 +21,38 @@ struct DictationAudioRouteControllerTests {
         #expect(controller.cachedPreferredInputDeviceIDForDictation() == 82)
     }
 
-    @Test("dictation preserves default input for speaker and unknown output")
-    func dictationPreservesDefaultInputForSpeakerAndUnknownOutput() {
-        for routeKind in [AudioOutputRouteKind.speakerLike, .unknown] {
-            let inspector = FakeCoreAudioDeviceInspector(
-                defaultOutputDeviceID: 10,
-                outputRouteKind: routeKind,
-                builtInInputDeviceID: 82
-            )
-            let controller = DictationAudioRouteController(
-                inspector: inspector,
-                queue: DispatchQueue(label: "test.dictation-audio-route.\(routeKind.description)"),
-                observesDefaultOutputChanges: false
-            )
+    @Test("dictation preserves default input for speaker output")
+    func dictationPreservesDefaultInputForSpeakerOutput() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            builtInInputDeviceID: 82
+        )
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: DispatchQueue(label: "test.dictation-audio-route.speaker-like"),
+            observesDefaultOutputChanges: false
+        )
 
-            #expect(controller.preferredInputDeviceIDForDictation() == nil)
-            #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
-        }
+        #expect(controller.preferredInputDeviceIDForDictation() == nil)
+        #expect(controller.cachedPreferredInputDeviceIDForDictation() == nil)
+    }
+
+    @Test("dictation prefers built-in mic for unknown output")
+    func dictationPrefersBuiltInMicForUnknownOutput() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .unknown,
+            builtInInputDeviceID: 82
+        )
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: DispatchQueue(label: "test.dictation-audio-route.unknown"),
+            observesDefaultOutputChanges: false
+        )
+
+        #expect(controller.preferredInputDeviceIDForDictation() == 82)
+        #expect(controller.cachedPreferredInputDeviceIDForDictation() == 82)
     }
 
     @Test("dictation falls back to default input when built-in mic is unavailable")
