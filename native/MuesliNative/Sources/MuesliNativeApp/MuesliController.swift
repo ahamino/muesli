@@ -4588,6 +4588,7 @@ final class MuesliController: NSObject {
         meetingMonitor.resumeAfterCooldown()
         fputs("[muesli-native] Nemotron streaming done (\(String(format: "%.1f", duration))s)\n", stderr)
         finishDictationLatencyTrace("nemotron_stop")
+        syncDictationRecorderWarmup(reason: "nemotron-stop")
     }
 
     private func finishStandardDictationStop(wavURL stoppedWavURL: URL?, startedAt: Date) {
@@ -4652,6 +4653,7 @@ final class MuesliController: NSObject {
                         self.resetDictationOutputMode()
                         self.setState(.idle)
                         self.meetingMonitor.resumeAfterCooldown()
+                        self.syncDictationRecorderWarmup(reason: "transcription-complete")
                     }
                     return
                 }
@@ -4664,6 +4666,7 @@ final class MuesliController: NSObject {
                         self.resetDictationOutputMode()
                         self.setState(.idle)
                         self.meetingMonitor.resumeAfterCooldown()
+                        self.syncDictationRecorderWarmup(reason: "transcription-complete")
                     }
                     return
                 }
@@ -4685,6 +4688,7 @@ final class MuesliController: NSObject {
                     self.resetDictationOutputMode()
                     self.setState(.idle)
                     self.meetingMonitor.resumeAfterCooldown()
+                    self.syncDictationRecorderWarmup(reason: "transcription-complete")
                     TelemetryDeck.signal("dictation.completed", parameters: [
                         "backend": self.selectedBackend.backend,
                         "paste_method": outputMode.pasteMethod,
@@ -4696,6 +4700,7 @@ final class MuesliController: NSObject {
                     self.resetDictationOutputMode()
                     self.setState(.idle)
                     self.meetingMonitor.resumeAfterCooldown()
+                    self.syncDictationRecorderWarmup(reason: "transcription-cancelled")
                 }
             } catch {
                 fputs("[muesli-native] transcription failed: \(error)\n", stderr)
@@ -4706,6 +4711,7 @@ final class MuesliController: NSObject {
                     self.resetDictationOutputMode()
                     self.setState(.idle)
                     self.meetingMonitor.resumeAfterCooldown()
+                    self.syncDictationRecorderWarmup(reason: "transcription-failed")
                 }
             }
         }
