@@ -4027,9 +4027,6 @@ final class MuesliController: NSObject {
         }
         markDictationLatency("prepare_requested")
         guard selectedBackend.backend != "nemotron" else {
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
             return
         }
         meetingMonitor.suppressWhileActive()
@@ -4072,6 +4069,8 @@ final class MuesliController: NSObject {
             && hasStarted
             && config.resolvedOnboardingUseCase.includesPushToTalk
             && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            && dictationState == .idle
+            && computerUseCommandStartedAt == nil
             && !isMeetingRecording()
             && !isStartingMeetingRecording
             && !isStoppingMeetingRecording
@@ -4249,8 +4248,6 @@ final class MuesliController: NSObject {
         if isDictationTestMode {
             dictationTestRecordingStarted?()
         }
-        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
-
         if shouldCaptureDictationContext {
             captureDictationContextAsync()
         }
@@ -4310,6 +4307,8 @@ final class MuesliController: NSObject {
 
         fputs("[muesli-native] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
+        markDictationLatency("sound_start_requested:hold-start")
+        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         beginDictationOutput()
         dictationStartedAt = nil
         capturedDictationContext = nil
@@ -4415,6 +4414,8 @@ final class MuesliController: NSObject {
         }
         markDictationLatency("toggle_start")
         meetingMonitor.suppressWhileActive()
+        markDictationLatency("sound_start_requested:toggle")
+        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         beginDictationOutput(mode: outputMode)
         dictationStartedAt = nil
         setState(.preparing)
@@ -4496,6 +4497,8 @@ final class MuesliController: NSObject {
             return
         }
 
+        markDictationLatency("sound_release_requested:stop")
+        SoundController.playDictationInsert(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         pendingDictationStopSessionID = dictationAudioSessionManager.currentSessionID
         pendingDictationStopStartedAt = startedAt
         dictationAudioSessionManager.stop()
@@ -4626,11 +4629,8 @@ final class MuesliController: NSObject {
                     self.statusBarController?.refresh()
                     self.historyWindowController?.reload()
                     self.syncAppState()
-                    if outputMode == .voiceNote {
-                        SoundController.playDictationInsert(enabled: self.shouldPlayDictationLifecycleSounds)
-                    } else {
+                    if outputMode != .voiceNote {
                         PasteController.paste(text: text)
-                        SoundController.playDictationInsert(enabled: self.shouldPlayDictationLifecycleSounds)
                     }
                     self.resetDictationOutputMode()
                     self.setState(.idle)

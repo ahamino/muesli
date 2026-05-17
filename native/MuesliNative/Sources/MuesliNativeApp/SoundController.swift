@@ -119,7 +119,7 @@ enum SoundController {
 }
 
 private enum SystemSoundPlayer {
-    private static let queue = DispatchQueue(label: "com.muesli.system-sound-player", qos: .utility)
+    private static let queue = DispatchQueue(label: "com.muesli.system-sound-player", qos: .userInitiated)
     private static var soundIDs: [String: SystemSoundID] = [:]
 
     static func prewarm(names: [String]) {
