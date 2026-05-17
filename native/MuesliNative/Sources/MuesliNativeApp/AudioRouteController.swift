@@ -61,18 +61,12 @@ enum AudioRouteClassifier {
             || device.transportType == kAudioDeviceTransportTypeBluetoothLE {
             // Avoid brand/product-name heuristics. Bluetooth headsets expose input
             // streams; output-only Bluetooth routes behave like external speakers.
-            // If CoreAudio only exposes generic Bluetooth metadata, a high-rate
-            // output with an input stream is more likely a speakerphone/soundbar
-            // profile than a headset microphone profile.
-            if device.hasInputStreams,
-               let sampleRate = device.nominalSampleRate,
-               sampleRate > 24_000 {
-                return .speakerLike
-            }
-            // Only apply the headset fallback when CoreAudio gives us no
-            // terminal/data-source signal at all. Unknown Bluetooth devices
-            // with any non-headphone metadata stay speaker-like so opt-in
-            // ducking still protects against external speaker bleed.
+            // CoreAudio can expose AirPods and similar devices as high-rate generic
+            // Bluetooth outputs, so sample rate is not a reliable speaker signal.
+            // Only apply the headset fallback when CoreAudio gives us no terminal
+            // or data-source signal at all. Unknown Bluetooth devices with any
+            // non-headphone metadata stay speaker-like so opt-in ducking still
+            // protects against external speaker bleed.
             return device.hasInputStreams && routeKinds.isEmpty ? .headphoneLike : .speakerLike
         }
 

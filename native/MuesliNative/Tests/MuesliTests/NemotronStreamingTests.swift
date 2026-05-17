@@ -216,6 +216,31 @@ struct StreamingDictationControllerTests {
     }
 
     @available(macOS 15, *)
+    @Test("chunk transcription failure cancels mic session and permits retry")
+    func chunkTranscriptionFailureCancelsMicSessionAndPermitsRetry() async {
+        let transcriber = ThrowingChunkNemotronStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let failures = FailureCounter()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+        controller.onFailure = { _ in
+            failures.increment()
+        }
+
+        #expect(controller.start() == true)
+        recorder.emit(samples: [Float](repeating: 0.2, count: 8960))
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await transcriber.transcribeCalls == 1)
+        #expect(recorder.cancelCalls == 1)
+        #expect(failures.value == 1)
+        #expect(controller.start() == true)
+        controller.cancel()
+    }
+
+    @available(macOS 15, *)
     @Test("stop completes when stream state initialization stalls")
     func stopCompletesWhenStreamStateInitializationStalls() async {
         let transcriber = HangingNemotronStreamingTranscriber()
@@ -342,6 +367,23 @@ private actor DelayedNemotronStreamingTranscriber: NemotronStreamingTranscribing
     ) async throws -> String {
         transcribeCalls += 1
         return " hello"
+    }
+}
+
+@available(macOS 15, *)
+private actor ThrowingChunkNemotronStreamingTranscriber: NemotronStreamingTranscribing {
+    private(set) var transcribeCalls = 0
+
+    func makeStreamState() async throws -> NemotronStreamingTranscriber.StreamState {
+        try await NemotronStreamingTranscriber().makeStreamState()
+    }
+
+    func transcribeChunk(
+        samples: [Float],
+        state: inout NemotronStreamingTranscriber.StreamState
+    ) async throws -> String {
+        transcribeCalls += 1
+        throw NSError(domain: "ThrowingChunkNemotronStreamingTranscriber", code: 1)
     }
 }
 

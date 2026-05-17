@@ -66,6 +66,7 @@ final class StreamingDictationController {
     private var fullTranscript = ""
     private var isActive = false
     private var activeSessionID: UUID?
+    private var stoppingSessionID: UUID?
     private var streamStateTask: Task<Void, Never>?
     private let chunkSamples = 8960  // 560ms at 16kHz
     private static let stopStreamStateTimeout: TimeInterval = 1.0
@@ -158,7 +159,20 @@ final class StreamingDictationController {
 
     /// Stop recording and finish queued audio off the caller's thread.
     func stop(completion: @escaping (String) -> Void) {
-        guard let sessionID = activeSessionID else {
+        let sessionID: UUID
+        if let activeSessionID {
+            sessionID = activeSessionID
+        } else if stoppingSessionID != nil {
+            let didAttachToStop = stopLock.withLock {
+                guard isStopping else { return false }
+                stopCompletions.append(completion)
+                return true
+            }
+            if !didAttachToStop {
+                completion(fullTranscript)
+            }
+            return
+        } else {
             completion(fullTranscript)
             return
         }
@@ -170,6 +184,8 @@ final class StreamingDictationController {
         }
         guard shouldStartStop else { return }
         isActive = false
+        activeSessionID = nil
+        stoppingSessionID = sessionID
 
         let _ = recorder.stop()
 
@@ -223,6 +239,7 @@ final class StreamingDictationController {
     private func resetActiveSession(cancelRecorder: Bool) {
         isActive = false
         activeSessionID = nil
+        stoppingSessionID = nil
         streamStateTask?.cancel()
         streamStateTask = nil
         completeStop(with: fullTranscript)
@@ -322,7 +339,7 @@ final class StreamingDictationController {
     }
 
     private func isCurrentSession(_ sessionID: UUID) -> Bool {
-        activeSessionID == sessionID
+        activeSessionID == sessionID || stoppingSessionID == sessionID
     }
 
     private func waitForDrain(sessionID: UUID, timeout: TimeInterval) async {
@@ -362,6 +379,7 @@ final class StreamingDictationController {
     private func finishStoppedSession(sessionID: UUID) -> String {
         guard isCurrentSession(sessionID) else { return fullTranscript }
         activeSessionID = nil
+        stoppingSessionID = nil
         streamStateTask = nil
         queueLock.withLock {
             chunkQueue.removeAll()
@@ -408,6 +426,10 @@ final class StreamingDictationController {
                 }
             } catch {
                 fputs("[streaming-dictation] chunk error: \(error)\n", stderr)
+                guard isCurrentSession(sessionID) else { return .finished }
+                streamState = nil
+                failActiveSession(sessionID: sessionID, error: error)
+                return .finished
             }
         }
     }

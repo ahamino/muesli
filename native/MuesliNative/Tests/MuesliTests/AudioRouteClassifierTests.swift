@@ -61,8 +61,8 @@ struct AudioRouteClassifierTests {
         #expect(route == .speakerLike)
     }
 
-    @Test("Bluetooth speakerphone high-rate generic route is speaker-like")
-    func bluetoothSpeakerphoneHighRateGenericRouteIsSpeakerLike() {
+    @Test("Bluetooth high-rate generic route with input is headphone-like")
+    func bluetoothHighRateGenericRouteWithInputIsHeadphoneLike() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: "Wireless Output",
@@ -73,7 +73,7 @@ struct AudioRouteClassifierTests {
             )
         )
 
-        #expect(route == .speakerLike)
+        #expect(route == .headphoneLike)
     }
 
     @Test("Bluetooth headset route does not depend on brand or product words")
