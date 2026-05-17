@@ -259,12 +259,16 @@ struct AudioDuckingControllerTests {
 
         controller.beginDictationDucking(enabled: true)
         controller.waitForIdle()
-        controller.restoreDictationDucking()
+        var restoreCompletionCount = 0
+        controller.restoreDictationDucking {
+            restoreCompletionCount += 1
+        }
         controller.beginDictationDucking(enabled: true)
         controller.waitForIdle()
         Thread.sleep(forTimeInterval: 0.07)
         controller.waitForIdle()
 
+        #expect(restoreCompletionCount == 1)
         #expect(client.muteValues[.init(1, kAudioObjectPropertyElementMain)] == true)
         #expect(client.muteSetCalls == [
             .init(deviceID: 1, element: kAudioObjectPropertyElementMain, value: true),

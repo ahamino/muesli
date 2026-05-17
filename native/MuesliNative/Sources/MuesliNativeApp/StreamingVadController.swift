@@ -146,7 +146,9 @@ final class StreamingVadController: @unchecked Sendable {
         }
         guard shouldRotate else { return }
         fputs("[vad] max chunk duration reached, forcing rotation\n", stderr)
-        onChunkBoundary?()
+        DispatchQueue.main.async { [weak self] in
+            self?.onChunkBoundary?()
+        }
     }
 
     private func startDrainIfNeeded() {
@@ -207,9 +209,9 @@ final class StreamingVadController: @unchecked Sendable {
 
                 if shouldRotate {
                     fputs("[vad] speech end detected, rotating chunk\n", stderr)
-                    onChunkBoundary?()
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
+                        self.onChunkBoundary?()
                         self.maxDurationTimer?.fireDate = Date().addingTimeInterval(self.maxChunkDuration)
                     }
                 }
