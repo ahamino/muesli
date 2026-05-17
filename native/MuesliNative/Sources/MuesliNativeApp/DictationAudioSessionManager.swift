@@ -63,6 +63,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
 
     private let recorder: DictationAudioRecording
     private let duckingController: AudioDuckingManaging
+    private let mediaPlaybackController: MediaPlaybackManaging
     private let routingController: DictationAudioRouting
     private let queue: DispatchQueue
     private let eventQueue: DispatchQueue
@@ -81,12 +82,14 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     init(
         recorder: DictationAudioRecording,
         duckingController: AudioDuckingManaging,
+        mediaPlaybackController: MediaPlaybackManaging = MediaPlaybackController(),
         routingController: DictationAudioRouting,
         queue: DispatchQueue = DispatchQueue(label: "com.muesli.dictation-audio-session-manager"),
         eventQueue: DispatchQueue = .main
     ) {
         self.recorder = recorder
         self.duckingController = duckingController
+        self.mediaPlaybackController = mediaPlaybackController
         self.routingController = routingController
         self.queue = queue
         self.eventQueue = eventQueue
@@ -123,18 +126,22 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         recorder.currentPower()
     }
 
-    func arm(source: String, duckingEnabled: Bool) {
+    func arm(source: String, duckingEnabled: Bool, mediaPauseEnabled: Bool) {
         let sessionID = ensureSession()
         emit(.armed(sessionID, source: source))
         emitLatency("ui_armed")
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
+            guard self.sessionHintMatches(sessionID) else {
+                self.emitLatency("stale_session_ignored:\(source)")
+                return
+            }
             self.ensureSessionStateLocked(sessionID)
             guard self.isCurrent(sessionID) else { return }
             self.stateStorage = .armed(sessionID)
             self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
             self.emitLatency("route_snapshot \(self.routeSnapshot.debugDescription)")
-            self.beginDuckingIfNeeded(duckingEnabled: duckingEnabled)
+            self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             self.recorder.keepsAudioGraphWarm = true
             do {
                 self.emitLatency("activation_begin:\(source)")
@@ -148,13 +155,18 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func beginRecording(mode: String, duckingEnabled: Bool) {
+    func beginRecording(mode: String, duckingEnabled: Bool, mediaPauseEnabled: Bool) {
         let sessionID = ensureSession()
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
+            guard self.sessionHintMatches(sessionID) else {
+                self.emitLatency("stale_session_ignored:\(mode)")
+                return
+            }
+            let previousState = self.stateStorage
             self.ensureSessionStateLocked(sessionID)
             guard self.isCurrent(sessionID) else { return }
-            switch self.stateStorage {
+            switch previousState {
             case .acquiringAudio, .streamActive, .speechDetected:
                 self.emitLatency("activation_reused:\(mode)")
                 return
@@ -164,8 +176,13 @@ final class DictationAudioSessionManager: @unchecked Sendable {
             self.stateStorage = .acquiringAudio(sessionID)
             self.emit(.acquiringAudio(sessionID))
             self.emitLatency("threshold_met:\(mode)")
-            self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
-            self.beginDuckingIfNeeded(duckingEnabled: duckingEnabled)
+            if case .armed = previousState {
+                self.routeSnapshot = self.makeRouteSnapshot(refreshInput: false)
+                self.emitLatency("route_snapshot_cached:\(mode) \(self.routeSnapshot.debugDescription)")
+            } else {
+                self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
+            }
+            self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             self.duckingController.ensureCurrentDefaultDucked()
             self.recorder.preferredInputDeviceID = self.routeSnapshot.preferredInputDeviceID
             self.recorder.keepsAudioGraphWarm = true
@@ -186,14 +203,14 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
-    func beginExternalSession(source: String, duckingEnabled: Bool) {
+    func beginExternalSession(source: String, duckingEnabled: Bool, mediaPauseEnabled: Bool) {
         setExternalSessionHint(true)
         queue.async { [self] in
             self.cancelPendingRouteRefreshLocked()
             self.externalSessionActive = true
             self.routeSnapshot = self.makeRouteSnapshot(refreshInput: true)
             self.emitLatency("external_begin:\(source)")
-            self.beginDuckingIfNeeded(duckingEnabled: duckingEnabled)
+            self.beginSessionAudioControls(duckingEnabled: duckingEnabled, mediaPauseEnabled: mediaPauseEnabled)
             self.duckingController.ensureCurrentDefaultDucked()
         }
     }
@@ -291,6 +308,12 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
+    private func sessionHintMatches(_ sessionID: UUID) -> Bool {
+        sessionHintLock.withLock {
+            self.sessionHint == sessionID
+        }
+    }
+
     private func setExternalSessionHint(_ active: Bool) {
         sessionHintLock.withLock {
             externalSessionHint = active
@@ -331,6 +354,14 @@ final class DictationAudioSessionManager: @unchecked Sendable {
         }
     }
 
+    private func beginSessionAudioControls(duckingEnabled: Bool, mediaPauseEnabled: Bool) {
+        mediaPlaybackController.beginDictationMediaPause(
+            enabled: mediaPauseEnabled,
+            routeKind: routeSnapshot.routeKind
+        )
+        beginDuckingIfNeeded(duckingEnabled: duckingEnabled)
+    }
+
     private func beginDuckingIfNeeded(duckingEnabled: Bool) {
         duckingEnabledForSession = duckingEnabled && routeSnapshot.shouldDuck
         emitLatency(duckingEnabledForSession ? "duck_begin" : "duck_skip")
@@ -338,6 +369,7 @@ final class DictationAudioSessionManager: @unchecked Sendable {
     }
 
     private func restoreSessionAudioState(completion: (() -> Void)? = nil) {
+        mediaPlaybackController.restoreDictationMediaPause()
         duckingController.restoreDictationDucking(completion: completion)
         routingController.refreshRouteAfterDictationSession()
         duckingEnabledForSession = false

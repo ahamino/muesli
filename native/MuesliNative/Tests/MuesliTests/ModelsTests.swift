@@ -1366,6 +1366,12 @@ struct AppConfigAppearanceTests {
         #expect(config.muteSystemAudioDuringDictation == false)
     }
 
+    @Test("pauseMediaDuringDictation defaults to false")
+    func pauseMediaDuringDictationDefault() {
+        let config = AppConfig()
+        #expect(config.pauseMediaDuringDictation == false)
+    }
+
     @Test("recordingColorHex defaults to Catppuccin Mocha base")
     func recordingColorHexDefault() {
         let config = AppConfig()
@@ -1388,6 +1394,15 @@ struct AppConfigAppearanceTests {
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.muteSystemAudioDuringDictation == true)
+    }
+
+    @Test("pauseMediaDuringDictation round-trips through JSON")
+    func pauseMediaDuringDictationRoundTrip() throws {
+        var config = AppConfig()
+        config.pauseMediaDuringDictation = true
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.pauseMediaDuringDictation == true)
     }
 
     @Test("recordingColorHex round-trips through JSON")
@@ -1413,6 +1428,13 @@ struct AppConfigAppearanceTests {
         #expect(decoded.muteSystemAudioDuringDictation == false)
     }
 
+    @Test("unknown JSON keys are ignored — pauseMediaDuringDictation falls back to default")
+    func pauseMediaDuringDictationFallsBackOnMissingKey() throws {
+        let json = Data("{}".utf8)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
+        #expect(decoded.pauseMediaDuringDictation == false)
+    }
+
     @Test("unknown JSON keys are ignored — recordingColorHex falls back to default")
     func recordingColorHexFallsBackOnMissingKey() throws {
         let json = Data("{}".utf8)
@@ -1436,6 +1458,15 @@ struct AppConfigAppearanceTests {
         let data = try JSONEncoder().encode(config)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(json?["mute_system_audio_during_dictation"] as? Bool == true)
+    }
+
+    @Test("pauseMediaDuringDictation CodingKey is pause_media_during_dictation")
+    func pauseMediaDuringDictationCodingKey() throws {
+        var config = AppConfig()
+        config.pauseMediaDuringDictation = true
+        let data = try JSONEncoder().encode(config)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(json?["pause_media_during_dictation"] as? Bool == true)
     }
 
     @Test("recordingColorHex CodingKey is recording_color_hex")

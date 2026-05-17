@@ -4100,7 +4100,8 @@ final class MuesliController: NSObject {
             meetingMonitor.refreshState()
             dictationAudioSessionManager.arm(
                 source: "hotkey_arm",
-                duckingEnabled: config.muteSystemAudioDuringDictation
+                duckingEnabled: config.muteSystemAudioDuringDictation,
+                mediaPauseEnabled: config.pauseMediaDuringDictation
             )
         }
     }
@@ -4246,7 +4247,6 @@ final class MuesliController: NSObject {
             meetingMonitor.resumeAfterCooldown()
             meetingMonitor.refreshState()
             finishDictationLatencyTrace("audio_session_failed")
-            syncDictationRecorderWarmup(reason: "audio-session-failed")
         case .latency(let event, let date):
             markDictationLatency(event, at: date)
         }
@@ -4270,6 +4270,8 @@ final class MuesliController: NSObject {
                 self?.dictationAudioSessionManager.currentPower() ?? -160
             }
         }
+        markDictationLatency("sound_start_requested:stream-active")
+        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         markDictationLatency("ui_stream_active")
         logDictationPowerSample(label: "ui_power_sample_350ms", delay: 0.35)
         logDictationPowerSample(label: "ui_power_sample_1000ms", delay: 1.0)
@@ -4335,15 +4337,14 @@ final class MuesliController: NSObject {
 
         fputs("[muesli-native] recording start\n", stderr)
         meetingMonitor.suppressWhileActive()
-        markDictationLatency("sound_start_requested:hold-start")
-        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         beginDictationOutput()
         dictationStartedAt = nil
         capturedDictationContext = nil
         setState(.preparing)
         dictationAudioSessionManager.beginRecording(
             mode: "hold-start",
-            duckingEnabled: config.muteSystemAudioDuringDictation
+            duckingEnabled: config.muteSystemAudioDuringDictation,
+            mediaPauseEnabled: config.pauseMediaDuringDictation
         )
     }
 
@@ -4468,8 +4469,6 @@ final class MuesliController: NSObject {
         }
         markDictationLatency("toggle_start")
         meetingMonitor.suppressWhileActive()
-        markDictationLatency("sound_start_requested:toggle")
-        SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
         beginDictationOutput(mode: outputMode)
         dictationStartedAt = nil
         setState(.preparing)
@@ -4482,11 +4481,14 @@ final class MuesliController: NSObject {
                 nemotronStreamingSessionID = sessionID
                 previousStreamText = ""
                 dictationStartedAt = Date()
+                markDictationLatency("sound_start_requested:nemotron-toggle")
+                SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
                 setState(.recording)
                 indicator.setToggleDictation(true, config: config)
                 dictationAudioSessionManager.beginExternalSession(
                     source: "nemotron-toggle",
-                    duckingEnabled: config.muteSystemAudioDuringDictation
+                    duckingEnabled: config.muteSystemAudioDuringDictation,
+                    mediaPauseEnabled: config.pauseMediaDuringDictation
                 )
                 meetingMonitor.refreshState()
                 fputs("[muesli-native] Nemotron streaming toggle mode active\n", stderr)
@@ -4499,7 +4501,8 @@ final class MuesliController: NSObject {
 
         dictationAudioSessionManager.beginRecording(
             mode: "toggle",
-            duckingEnabled: config.muteSystemAudioDuringDictation
+            duckingEnabled: config.muteSystemAudioDuringDictation,
+            mediaPauseEnabled: config.pauseMediaDuringDictation
         )
     }
 

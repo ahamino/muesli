@@ -9,7 +9,7 @@ struct DictationAudioSessionManagerTests {
     func armActivatesWarmEngineWithoutStartingCapture() {
         let harness = Harness(routeKind: .speakerLike)
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.recorder.activateCalls == 1)
@@ -25,7 +25,7 @@ struct DictationAudioSessionManagerTests {
 
         harness.manager.refreshRoute(reason: "route-change", canWarmUp: true)
         let startedAt = Date()
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
         let elapsed = Date().timeIntervalSince(startedAt)
         harness.wait()
 
@@ -38,9 +38,9 @@ struct DictationAudioSessionManagerTests {
     func beginRecordingReusesDuplicateActivation() {
         let harness = Harness(routeKind: .speakerLike)
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
-        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true)
-        harness.manager.beginRecording(mode: "start", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.manager.beginRecording(mode: "start", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.recorder.activateCalls == 2)
@@ -54,12 +54,38 @@ struct DictationAudioSessionManagerTests {
         })
     }
 
+    @Test("begin recording queued behind a failed arm does not restart failed session")
+    func queuedBeginAfterFailedArmIsIgnored() {
+        let harness = Harness(routeKind: .speakerLike)
+        harness.recorder.activateError = NSError(domain: "DictationAudioSessionManagerTests", code: 1)
+
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.wait()
+
+        #expect(harness.recorder.activateCalls == 1)
+        #expect(harness.recorder.prepareCalls == 0)
+        #expect(harness.recorder.startCalls == 0)
+        #expect(harness.events.contains { event in
+            if case .failed = event {
+                return true
+            }
+            return false
+        })
+        #expect(harness.events.contains { event in
+            if case .latency(let name, _) = event {
+                return name == "stale_session_ignored:hold-start"
+            }
+            return false
+        })
+    }
+
     @Test("headphone route skips ducking and selects built-in mic")
     func headphoneRouteSkipsDucking() {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
-        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.ducking.beginCalls.allSatisfy { $0 == false })
@@ -71,8 +97,8 @@ struct DictationAudioSessionManagerTests {
     func unknownRouteDucksDuringOutputTransitions() {
         let harness = Harness(routeKind: .unknown)
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
-        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
+        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.ducking.beginCalls.allSatisfy { $0 == true })
@@ -85,7 +111,7 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
         harness.route.cachedPreferredInputDeviceID = nil
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: false)
+        harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.route.preferredInputCalls == 1)
@@ -97,7 +123,7 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
         harness.route.cachedPreferredInputDeviceID = nil
 
-        harness.manager.beginRecording(mode: "toggle", duckingEnabled: false)
+        harness.manager.beginRecording(mode: "toggle", duckingEnabled: false, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.route.preferredInputCalls == 1)
@@ -111,7 +137,7 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
         harness.route.cachedPreferredInputDeviceID = nil
 
-        harness.manager.beginExternalSession(source: "nemotron-toggle", duckingEnabled: true)
+        harness.manager.beginExternalSession(source: "nemotron-toggle", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.route.preferredInputCalls == 1)
@@ -122,19 +148,38 @@ struct DictationAudioSessionManagerTests {
     func beginRecordingRefreshesRouteChangedAfterArm() {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
 
-        harness.manager.arm(source: "hotkey", duckingEnabled: true)
+        harness.manager.arm(source: "hotkey", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
         harness.route.routeKind = .speakerLike
         harness.route.preferredInputDeviceID = nil
+        harness.route.cachedPreferredInputDeviceID = nil
 
-        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true)
+        harness.manager.beginRecording(mode: "prepare", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
 
-        #expect(harness.route.preferredInputCalls == 2)
+        #expect(harness.route.preferredInputCalls == 1)
         #expect(harness.recorder.activateCalls == 2)
         #expect(harness.recorder.lastWarmInputDeviceID == nil)
         #expect(harness.recorder.preferredInputDeviceID == nil)
         #expect(harness.ducking.beginCalls == [false, true])
+    }
+
+    @Test("hold start uses cached route snapshot from arm path")
+    func holdStartUsesCachedRouteSnapshot() {
+        let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
+
+        harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: false)
+        harness.wait()
+        harness.manager.beginRecording(mode: "hold-start", duckingEnabled: false, mediaPauseEnabled: false)
+        harness.wait()
+
+        #expect(harness.route.preferredInputCalls == 1)
+        #expect(harness.events.contains { event in
+            if case .latency(let name, _) = event {
+                return name.hasPrefix("route_snapshot_cached:hold-start")
+            }
+            return false
+        })
     }
 
     @Test("stop restores ducking and emits wav URL")
@@ -143,7 +188,7 @@ struct DictationAudioSessionManagerTests {
         let wavURL = URL(fileURLWithPath: "/tmp/dictation.wav")
         harness.recorder.stopURL = wavURL
 
-        harness.manager.beginRecording(mode: "toggle", duckingEnabled: true)
+        harness.manager.beginRecording(mode: "toggle", duckingEnabled: true, mediaPauseEnabled: false)
         harness.wait()
         harness.manager.stop()
         harness.wait()
@@ -199,7 +244,7 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
 
         harness.manager.refreshRoute(reason: "route-change", delay: 0.2, canWarmUp: true)
-        harness.manager.arm(source: "hotkey", duckingEnabled: false)
+        harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: false)
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
@@ -222,7 +267,7 @@ struct DictationAudioSessionManagerTests {
     func recorderCallbacksEmitAudioStateEvents() {
         let harness = Harness(routeKind: .speakerLike)
 
-        harness.manager.beginRecording(mode: "toggle", duckingEnabled: false)
+        harness.manager.beginRecording(mode: "toggle", duckingEnabled: false, mediaPauseEnabled: false)
         harness.wait()
         let firstBufferAt = Date()
         harness.recorder.onFirstCapturedAudioBuffer?(firstBufferAt)
@@ -234,11 +279,36 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.events.contains { if case .speechDetected = $0 { return true }; return false })
         #expect(harness.events.contains { if case .noAudioTimeout = $0 { return true }; return false })
     }
+
+    @Test("media pause is requested with current route when enabled")
+    func mediaPauseRequestedWithCurrentRoute() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.arm(source: "hotkey", duckingEnabled: false, mediaPauseEnabled: true)
+        harness.wait()
+
+        #expect(harness.media.beginCalls == [
+            .init(enabled: true, routeKind: .speakerLike),
+        ])
+    }
+
+    @Test("stop restores media pause state")
+    func stopRestoresMediaPauseState() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.beginRecording(mode: "toggle", duckingEnabled: false, mediaPauseEnabled: true)
+        harness.wait()
+        harness.manager.stop()
+        harness.wait()
+
+        #expect(harness.media.restoreCalls == 1)
+    }
 }
 
 private final class Harness {
     let recorder = FakeDictationRecorder()
     let ducking = FakeDuckingManager()
+    let media = FakeMediaPlaybackManager()
     let route: FakeDictationRoute
     let managerQueue = DispatchQueue(label: "test.dictation-session.manager")
     let eventQueue = DispatchQueue(label: "test.dictation-session.events")
@@ -247,6 +317,7 @@ private final class Harness {
         let manager = DictationAudioSessionManager(
             recorder: recorder,
             duckingController: ducking,
+            mediaPlaybackController: media,
             routingController: route,
             queue: managerQueue,
             eventQueue: eventQueue
@@ -287,6 +358,7 @@ private final class FakeDictationRecorder: DictationAudioRecording {
     var stopURL: URL?
     var lastWarmInputDeviceID: AudioObjectID?
     var warmUpDelay: TimeInterval = 0
+    var activateError: Error?
 
     func prepare() throws {
         prepareCalls += 1
@@ -302,6 +374,9 @@ private final class FakeDictationRecorder: DictationAudioRecording {
 
     func activateWarmEngine(preferredInputDeviceID: AudioObjectID?) throws {
         activateCalls += 1
+        if let activateError {
+            throw activateError
+        }
         lastWarmInputDeviceID = preferredInputDeviceID
     }
 
@@ -343,6 +418,24 @@ private final class FakeDuckingManager: AudioDuckingManaging {
     func restoreDictationDucking(completion: (() -> Void)?) {
         restoreCalls += 1
         completion?()
+    }
+}
+
+private struct MediaPauseBeginCall: Equatable {
+    let enabled: Bool
+    let routeKind: AudioOutputRouteKind
+}
+
+private final class FakeMediaPlaybackManager: MediaPlaybackManaging {
+    var beginCalls: [MediaPauseBeginCall] = []
+    var restoreCalls = 0
+
+    func beginDictationMediaPause(enabled: Bool, routeKind: AudioOutputRouteKind) {
+        beginCalls.append(.init(enabled: enabled, routeKind: routeKind))
+    }
+
+    func restoreDictationMediaPause() {
+        restoreCalls += 1
     }
 }
 

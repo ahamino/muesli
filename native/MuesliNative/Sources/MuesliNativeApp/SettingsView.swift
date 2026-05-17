@@ -411,6 +411,12 @@ struct SettingsView: View {
             }
 
             settingsSection("Advanced") {
+                settingsRow("Pause media during dictation") {
+                    settingsSwitch(isOn: appState.config.pauseMediaDuringDictation) { newValue in
+                        controller.updateConfig { $0.pauseMediaDuringDictation = newValue }
+                    }
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Mute system audio during dictation") {
                     settingsSwitch(isOn: appState.config.muteSystemAudioDuringDictation) { newValue in
                         controller.updateConfig { $0.muteSystemAudioDuringDictation = newValue }
