@@ -75,6 +75,10 @@ enum AudioRouteClassifier {
             return device.hasInputStreams ? .headphoneLike : .speakerLike
         }
 
+        // Conservative fallback: wired headphones, USB headsets, or DACs that
+        // omit headphone terminal/data-source metadata are treated as speaker-like.
+        // Extend this when we have a reliable public CoreAudio signal for those
+        // devices; do not add product-name matching.
         return .speakerLike
     }
 
@@ -191,7 +195,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     func isDefaultOutputHeadphoneLike() -> Bool {
         // Unknown outputs are treated as non-speaker for lifecycle sounds so we
         // avoid playing cues into headphones during CoreAudio route transitions.
-        // Ducking uses RouteSnapshot.shouldDuck and still fails open for unknown.
+        // Dictation ducking is also limited to known speaker-like route snapshots.
         lock.withLock { snapshot.outputRouteKind != .speakerLike }
     }
 
