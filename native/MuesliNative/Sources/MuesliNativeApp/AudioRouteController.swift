@@ -21,6 +21,7 @@ struct AudioOutputDeviceDescription: Equatable {
     let name: String?
     let transportType: UInt32?
     let hasOutputStreams: Bool
+    let hasInputStreams: Bool
 }
 
 enum AudioRouteClassifier {
@@ -29,7 +30,9 @@ enum AudioRouteClassifier {
 
         if device.transportType == kAudioDeviceTransportTypeBluetooth
             || device.transportType == kAudioDeviceTransportTypeBluetoothLE {
-            return .headphoneLike
+            // Avoid brand/product-name heuristics. Bluetooth headsets expose input
+            // streams; output-only Bluetooth routes behave like external speakers.
+            return device.hasInputStreams ? .headphoneLike : .speakerLike
         }
 
         return .speakerLike
@@ -306,7 +309,8 @@ final class CoreAudioDeviceInspector: CoreAudioDeviceInspecting {
             for: AudioOutputDeviceDescription(
                 name: deviceName(for: deviceID),
                 transportType: transportType(for: deviceID),
-                hasOutputStreams: hasStreams(deviceID: deviceID, scope: kAudioDevicePropertyScopeOutput)
+                hasOutputStreams: hasStreams(deviceID: deviceID, scope: kAudioDevicePropertyScopeOutput),
+                hasInputStreams: hasStreams(deviceID: deviceID, scope: kAudioDevicePropertyScopeInput)
             )
         )
     }

@@ -10,7 +10,8 @@ struct AudioRouteClassifierTests {
             for: AudioOutputDeviceDescription(
                 name: nil,
                 transportType: kAudioDeviceTransportTypeBluetooth,
-                hasOutputStreams: true
+                hasOutputStreams: true,
+                hasInputStreams: true
             )
         )
 
@@ -23,20 +24,36 @@ struct AudioRouteClassifierTests {
             for: AudioOutputDeviceDescription(
                 name: "Wireless Audio",
                 transportType: kAudioDeviceTransportTypeBluetooth,
-                hasOutputStreams: true
+                hasOutputStreams: true,
+                hasInputStreams: true
             )
         )
 
         #expect(route == .headphoneLike)
     }
 
-    @Test("Bluetooth route does not depend on brand or product words")
-    func bluetoothRouteDoesNotDependOnBrandOrProductWords() {
+    @Test("Bluetooth speaker output is speaker-like when no input stream is exposed")
+    func bluetoothSpeakerOutputIsSpeakerLikeWithoutInputStream() {
         let route = AudioRouteClassifier.outputRouteKind(
             for: AudioOutputDeviceDescription(
                 name: "Generic Output",
                 transportType: kAudioDeviceTransportTypeBluetooth,
-                hasOutputStreams: true
+                hasOutputStreams: true,
+                hasInputStreams: false
+            )
+        )
+
+        #expect(route == .speakerLike)
+    }
+
+    @Test("Bluetooth headset route does not depend on brand or product words")
+    func bluetoothHeadsetRouteDoesNotDependOnBrandOrProductWords() {
+        let route = AudioRouteClassifier.outputRouteKind(
+            for: AudioOutputDeviceDescription(
+                name: "Generic Output",
+                transportType: kAudioDeviceTransportTypeBluetooth,
+                hasOutputStreams: true,
+                hasInputStreams: true
             )
         )
 
@@ -49,7 +66,8 @@ struct AudioRouteClassifierTests {
             for: AudioOutputDeviceDescription(
                 name: "MacBook Pro Speakers",
                 transportType: kAudioDeviceTransportTypeBuiltIn,
-                hasOutputStreams: true
+                hasOutputStreams: true,
+                hasInputStreams: false
             )
         )
 
@@ -62,7 +80,8 @@ struct AudioRouteClassifierTests {
             for: AudioOutputDeviceDescription(
                 name: "External Headphones",
                 transportType: kAudioDeviceTransportTypeBuiltIn,
-                hasOutputStreams: true
+                hasOutputStreams: true,
+                hasInputStreams: false
             )
         )
 
@@ -75,7 +94,8 @@ struct AudioRouteClassifierTests {
             for: AudioOutputDeviceDescription(
                 name: "MacBook Pro Microphone",
                 transportType: kAudioDeviceTransportTypeBuiltIn,
-                hasOutputStreams: false
+                hasOutputStreams: false,
+                hasInputStreams: true
             )
         )
 
