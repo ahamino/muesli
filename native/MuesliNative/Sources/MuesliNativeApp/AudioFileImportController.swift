@@ -74,7 +74,7 @@ enum AudioFileImportController {
 
     /// Converts the source audio file to 16kHz mono WAV for transcription.
     /// Returns the temporary WAV URL and the audio duration in seconds.
-    static func convertToWAV(sourceURL: URL) throws -> (wavURL: URL, duration: TimeInterval) {
+    static func convertToWAV(sourceURL: URL) async throws -> (wavURL: URL, duration: TimeInterval) {
         let asset = AVAsset(url: sourceURL)
         guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
             throw ImportError.noAudioTracks
@@ -170,7 +170,7 @@ enum AudioFileImportController {
         progress: @escaping (String) -> Void
     ) async throws -> ImportResult {
         progress("Converting audio file...")
-        let (wavURL, duration) = try convertToWAV(sourceURL: sourceURL)
+        let (wavURL, duration) = try await convertToWAV(sourceURL: sourceURL)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         let config = controller.config
@@ -184,6 +184,21 @@ enum AudioFileImportController {
             includeMeetingHelpers: true
         )
 
+        // Run VAD to skip silent files (prevents Cohere hallucinations on silence)
+        if let vadManager = transcriptionCoordinator.vadManager {
+            do {
+                let vadResults = try await vadManager.process(wavURL)
+                let hasSpeech = vadResults.contains { $0.probability > 0.5 }
+                if !hasSpeech {
+                    throw ImportError.readError("No speech detected in the selected audio file.")
+                }
+            } catch let error as ImportError {
+                throw error
+            } catch {
+                fputs("[import] VAD check failed, transcribing anyway: \(error)\n", stderr)
+            }
+        }
+
         progress("Transcribing audio...")
         let transcription = try await transcriptionCoordinator.transcribeMeeting(
             at: wavURL,
@@ -191,12 +206,14 @@ enum AudioFileImportController {
             cohereLanguage: config.resolvedCohereLanguage
         )
         let rawTranscript = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawTranscript.isEmpty else {
+            throw ImportError.readError("No speech was transcribed from the selected audio file.")
+        }
 
         // Run speaker diarization if available
         var diarizedTranscript = rawTranscript
         if let diarizerManager = transcriptionCoordinator.getDiarizerManager(),
-           diarizerManager.isAvailable,
-           !rawTranscript.isEmpty {
+           diarizerManager.isAvailable {
             progress("Identifying speakers...")
             do {
                 let converter = AudioConverter()
@@ -241,6 +258,9 @@ enum AudioFileImportController {
             )
         }
 
+        // Persist the converted WAV as a saved recording so retranscription works
+        let savedRecordingPath = try persistRecording(wavURL: wavURL, title: title)
+
         progress("Saving...")
         let now = Date()
         let startTime = now.addingTimeInterval(-duration)
@@ -253,7 +273,7 @@ enum AudioFileImportController {
             formattedNotes: formattedNotes,
             micAudioPath: nil,
             systemAudioPath: nil,
-            savedRecordingPath: nil,
+            savedRecordingPath: savedRecordingPath,
             selectedTemplateID: templateSnapshot.id,
             selectedTemplateName: templateSnapshot.name,
             selectedTemplateKind: templateSnapshot.kind,
@@ -279,9 +299,35 @@ enum AudioFileImportController {
         return directory.appendingPathComponent("import_\(UUID().uuidString).wav")
     }
 
+    /// Copies the converted WAV to the meeting-recordings directory so the imported
+    /// meeting can be retranscribed later.
+    private static func persistRecording(wavURL: URL, title: String) throws -> String {
+        let recordingsDirectory = AppIdentity.supportDirectoryURL
+            .appendingPathComponent("meeting-recordings", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: recordingsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+        let datePrefix = dateFormatter.string(from: Date())
+        let safeTitle = title.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let filename = "\(datePrefix)_\(safeTitle).wav"
+        let destinationURL = recordingsDirectory.appendingPathComponent(filename)
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: wavURL, to: destinationURL)
+        return destinationURL.path
+    }
+
     /// Formats transcript text with speaker labels based on diarization segments.
-    /// Uses a simple approach: if diarization identifies distinct speakers, prefix
-    /// transcript lines with speaker labels.
+    /// When diarization identifies multiple speakers, the transcript is annotated with
+    /// speaker labels at segment boundaries so both the user and summarizer can
+    /// attribute spoken text to individual speakers.
     static func formatTranscriptWithSpeakers(
         rawText: String,
         diarizationSegments: [TimedSpeakerSegment],
@@ -292,32 +338,41 @@ enum AudioFileImportController {
         let speakerCount = Set(diarizationSegments.map(\.speakerId)).count
         guard speakerCount > 1 else { return rawText }
 
-        // Build a speaker-labeled transcript using diarization segments
-        var lines: [String] = []
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.zeroFormattingBehavior = [.pad]
-
-        for segment in diarizationSegments {
-            let startStr = formatTimeInterval(segment.startTime)
-            let speaker = segment.speakerId.replacingOccurrences(of: "SPEAKER_", with: "Speaker ")
-            lines.append("[\(startStr)] \(speaker):")
-        }
-
-        // If the raw text has timestamp markers, use those instead
-        if rawText.contains("[") && rawText.contains("]") {
+        // If the raw text already has timestamped speaker lines, use those instead.
+        if rawText.range(of: #"(?m)^\[[0-9]{2}:[0-9]{2}(?::[0-9]{2})?\]\s+(You|Others|Speaker\s+\d+):"#, options: .regularExpression) != nil {
             return rawText
         }
 
-        // Fallback: prepend a header and return the raw text
-        let header = diarizationSegments.map { segment in
+        // Build a speaker-labeled transcript using diarization segments
+        var result = "## Speaker Segments\n"
+        for segment in diarizationSegments {
             let startStr = formatTimeInterval(segment.startTime)
             let endStr = formatTimeInterval(segment.endTime)
             let speaker = segment.speakerId.replacingOccurrences(of: "SPEAKER_", with: "Speaker ")
-            return "[\(startStr) - \(endStr)] \(speaker)"
-        }.joined(separator: "\n")
+            result += "[\(startStr) - \(endStr)] \(speaker)\n"
+        }
 
-        return "## Speaker Segments\n\(header)\n\n## Transcript\n\(rawText)"
+        result += "\n## Transcript\n"
+
+        // Annotate the transcript with speaker labels at segment boundaries
+        let lines = rawText.components(separatedBy: .newlines)
+        let segmentCount = diarizationSegments.count
+        let lineCount = lines.count
+
+        if lineCount > 0, segmentCount > 0 {
+            let linesPerSegment = max(1, lineCount / segmentCount)
+            for (i, line) in lines.enumerated() {
+                let segmentIndex = min(i / linesPerSegment, segmentCount - 1)
+                let speaker = diarizationSegments[segmentIndex].speakerId
+                    .replacingOccurrences(of: "SPEAKER_", with: "Speaker ")
+                let startStr = formatTimeInterval(diarizationSegments[segmentIndex].startTime)
+                result += "[\(startStr)] \(speaker): \(line)\n"
+            }
+        } else {
+            result += rawText
+        }
+
+        return result
     }
 
     private static func formatTimeInterval(_ interval: TimeInterval) -> String {

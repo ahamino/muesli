@@ -2789,9 +2789,14 @@ final class MuesliController: NSObject {
             return
         }
 
+        isStartingMeetingRecording = true
+
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let sourceURL = await AudioFileImportController.selectFile() else { return }
+            guard let sourceURL = await AudioFileImportController.selectFile() else {
+                self.isStartingMeetingRecording = false
+                return
+            }
             await self.importAudioFile(from: sourceURL)
         }
     }
@@ -2807,6 +2812,8 @@ final class MuesliController: NSObject {
             return
         }
 
+        isStartingMeetingRecording = true
+
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.importAudioFile(from: url)
@@ -2817,7 +2824,6 @@ final class MuesliController: NSObject {
         let filename = sourceURL.deletingPathExtension().lastPathComponent
         let title = filename.isEmpty ? "Imported Recording" : filename
 
-        self.isStartingMeetingRecording = true
         self.updateMeetingStartStatus("Importing audio file...")
         self.beginMeetingActivity(reason: "Importing audio file for transcription")
         self.statusBarController?.setStatus("Importing audio...")

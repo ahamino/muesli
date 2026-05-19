@@ -11,11 +11,11 @@ struct AudioFileImportControllerTests {
     // MARK: - WAV Conversion Tests
 
     @Test("convertToWAV produces valid 16kHz mono WAV from valid audio")
-    func convertToWAVProducesValidOutput() throws {
+    func convertToWAVProducesValidOutput() async throws {
         let sourceURL = try createTestAudioFile(duration: 2.0, sampleRate: 44100, channels: 2)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
-        let (wavURL, duration) = try AudioFileImportController.convertToWAV(sourceURL: sourceURL)
+        let (wavURL, duration) = try await AudioFileImportController.convertToWAV(sourceURL: sourceURL)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         #expect(duration > 0)
@@ -31,7 +31,7 @@ struct AudioFileImportControllerTests {
     }
 
     @Test("convertToWAV throws noAudioTracks for file without audio")
-    func convertToWAVThrowsForNoAudio() throws {
+    func convertToWAVThrowsForNoAudio() async throws {
         // Create a minimal file that has no audio tracks (just a temp empty file)
         let tempDir = FileManager.default.temporaryDirectory
         let emptyURL = tempDir.appendingPathComponent("empty_test_\(UUID().uuidString).txt")
@@ -39,7 +39,7 @@ struct AudioFileImportControllerTests {
         defer { try? FileManager.default.removeItem(at: emptyURL) }
 
         do {
-            _ = try AudioFileImportController.convertToWAV(sourceURL: emptyURL)
+            _ = try await AudioFileImportController.convertToWAV(sourceURL: emptyURL)
             Issue.record("Expected convertToWAV to throw for non-audio file")
         } catch let error as AudioFileImportController.ImportError {
             #expect(error == .noAudioTracks || error.localizedDescription.contains("audio"))
@@ -49,11 +49,11 @@ struct AudioFileImportControllerTests {
     }
 
     @Test("convertToWAV handles mono source audio")
-    func convertToWAVHandlesMonoSource() throws {
+    func convertToWAVHandlesMonoSource() async throws {
         let sourceURL = try createTestAudioFile(duration: 1.0, sampleRate: 48000, channels: 1)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
-        let (wavURL, duration) = try AudioFileImportController.convertToWAV(sourceURL: sourceURL)
+        let (wavURL, duration) = try await AudioFileImportController.convertToWAV(sourceURL: sourceURL)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         #expect(duration > 0)
@@ -63,11 +63,11 @@ struct AudioFileImportControllerTests {
     }
 
     @Test("convertToWAV handles short audio clips")
-    func convertToWAVHandlesShortAudio() throws {
+    func convertToWAVHandlesShortAudio() async throws {
         let sourceURL = try createTestAudioFile(duration: 0.5, sampleRate: 44100, channels: 1)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
-        let (wavURL, duration) = try AudioFileImportController.convertToWAV(sourceURL: sourceURL)
+        let (wavURL, duration) = try await AudioFileImportController.convertToWAV(sourceURL: sourceURL)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
         #expect(duration > 0)
