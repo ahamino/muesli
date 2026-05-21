@@ -2950,6 +2950,7 @@ final class MuesliController: NSObject {
             // Audio import cancellation
             importTask?.cancel()
             importTask = nil
+            indicator.hideLoading()
         }
 
         statusBarController?.setStatus("Idle")
