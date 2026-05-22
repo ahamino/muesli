@@ -4,6 +4,13 @@ import MuesliCore
 private enum MeetingDocumentMode: Hashable {
     case notes
     case transcript
+    case chat
+}
+
+private enum RecordingContentMode: Hashable {
+    case notes
+    case live
+    case chat
 }
 
 private enum ManualNotesSaveStatus {
@@ -37,6 +44,7 @@ struct MeetingDetailView: View {
     @State private var manualEditorCommand: MarkdownEditorCommand?
     @State private var pendingTemplateID: String
     @State private var documentMode: MeetingDocumentMode
+    @State private var recordingMode: RecordingContentMode = .notes
     @State private var titleSaveTask: DispatchWorkItem?
     @State private var notesSaveTask: DispatchWorkItem?
     @State private var transcriptSaveTask: DispatchWorkItem?
@@ -185,6 +193,9 @@ struct MeetingDetailView: View {
                 VStack(alignment: .trailing, spacing: 10) {
                     if showsManualNotesEditor(for: meeting) {
                         recordingControlGroup(for: meeting)
+                        if meeting.status == .recording {
+                            recordingModePicker
+                        }
                     } else {
                         documentModePicker
 
@@ -211,33 +222,74 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func content(for meeting: MeetingRecord) -> some View {
         if showsManualNotesEditor(for: meeting) {
-            let isManualNotesEditable = canEditManualNotes(for: meeting)
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                manualNotesToolbar(for: meeting)
-                    .disabled(!isManualNotesEditable)
-
-                MarkdownRichTextEditor(
-                    text: $editableManualNotes,
-                    command: $manualEditorCommand,
-                    shouldFocus: isManualNotesEditable && meeting.status == .recording,
-                    isEditable: isManualNotesEditable,
-                    onTextChange: { notes in
-                        guard isManualNotesEditable else { return }
-                        saveManualNotes(meetingID: meeting.id, notes: notes)
+            if meeting.status == .recording {
+                switch recordingMode {
+                case .notes:
+                    let isManualNotesEditable = canEditManualNotes(for: meeting)
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                        manualNotesToolbar(for: meeting)
+                            .disabled(!isManualNotesEditable)
+                        MarkdownRichTextEditor(
+                            text: $editableManualNotes,
+                            command: $manualEditorCommand,
+                            shouldFocus: isManualNotesEditable,
+                            isEditable: isManualNotesEditable,
+                            onTextChange: { notes in
+                                guard isManualNotesEditable else { return }
+                                saveManualNotes(meetingID: meeting.id, notes: notes)
+                            }
+                        )
+                        .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                        .background(MuesliTheme.backgroundBase)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                        )
                     }
-                )
-                .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
-                .background(MuesliTheme.backgroundBase)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                .overlay(
-                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                )
+                    .padding(.horizontal, 40)
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                case .live:
+                    LiveTranscriptView(transcript: appState.liveMeetingTranscript)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .chat:
+                    MeetingChatView(
+                        transcript: appState.liveMeetingTranscript,
+                        config: appState.config
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                let isManualNotesEditable = canEditManualNotes(for: meeting)
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    manualNotesToolbar(for: meeting)
+                        .disabled(!isManualNotesEditable)
+
+                    MarkdownRichTextEditor(
+                        text: $editableManualNotes,
+                        command: $manualEditorCommand,
+                        shouldFocus: false,
+                        isEditable: isManualNotesEditable,
+                        onTextChange: { notes in
+                            guard isManualNotesEditable else { return }
+                            saveManualNotes(meetingID: meeting.id, notes: notes)
+                        }
+                    )
+                    .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                    .background(MuesliTheme.backgroundBase)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    )
+                }
+                .padding(.horizontal, 40)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(.horizontal, 40)
-            .padding(.top, 12)
-            .padding(.bottom, 24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if isEditingNotes {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                 contentToolbar(for: meeting)
@@ -290,6 +342,14 @@ struct MeetingDetailView: View {
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
                         .accessibilityHidden(documentMode != .transcript)
+
+                    MeetingChatView(
+                        transcript: meeting.rawTranscript,
+                        config: appState.config
+                    )
+                    .opacity(documentMode == .chat ? 1 : 0)
+                    .allowsHitTesting(documentMode == .chat)
+                    .accessibilityHidden(documentMode != .chat)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -305,11 +365,23 @@ struct MeetingDetailView: View {
         Picker("", selection: $documentMode) {
             Text("Notes").tag(MeetingDocumentMode.notes)
             Text("Transcript").tag(MeetingDocumentMode.transcript)
+            Text("Chat").tag(MeetingDocumentMode.chat)
+        }
+        .pickerStyle(.segmented)
+        .tint(MuesliTheme.accent)
+        .frame(width: 300)
+        .disabled(isEditingNotes || isEditingTranscript)
+    }
+
+    private var recordingModePicker: some View {
+        Picker("", selection: $recordingMode) {
+            Text("Notes").tag(RecordingContentMode.notes)
+            Text("Live").tag(RecordingContentMode.live)
+            Text("Chat").tag(RecordingContentMode.chat)
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
         .frame(width: 220)
-        .disabled(isEditingNotes || isEditingTranscript)
     }
 
     private func showsManualNotesEditor(for meeting: MeetingRecord) -> Bool {
@@ -987,6 +1059,8 @@ struct MeetingDetailView: View {
             return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
         case .transcript:
             return isEditingTranscript ? editableTranscript : meeting.rawTranscript
+        case .chat:
+            return meeting.rawTranscript
         }
     }
 
@@ -1504,7 +1578,7 @@ private struct MeetingTranscriptView: View {
     }
 }
 
-private struct TranscriptChatBubble: View {
+struct TranscriptChatBubble: View {
     let message: TranscriptChatMessage
 
     var body: some View {

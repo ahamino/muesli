@@ -113,6 +113,7 @@ final class MeetingSession {
     var onProgress: ((MeetingProcessingStage) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
+    var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -574,7 +575,13 @@ final class MeetingSession {
             )
             return segments
         }
-        if !micChunkCollector.add(task) {
+        if micChunkCollector.add(task) {
+            Task { [weak self] in
+                let segments = await task.value
+                guard !segments.isEmpty else { return }
+                self?.onChunkTranscribed?(segments, "You")
+            }
+        } else {
             task.cancel()
             cleanupTemporaryChunkURLs(rawChunkURL)
         }
@@ -633,7 +640,13 @@ final class MeetingSession {
             }
             return []
         }
-        if !systemChunkCollector.add(task) {
+        if systemChunkCollector.add(task) {
+            Task { [weak self] in
+                let segments = await task.value
+                guard !segments.isEmpty else { return }
+                self?.onChunkTranscribed?(segments, "Others")
+            }
+        } else {
             task.cancel()
         }
     }
