@@ -3,6 +3,7 @@ import MuesliCore
 
 private enum DictionaryRowMetrics {
     static let arrowWidth: CGFloat = 14
+    static let thresholdWidth: CGFloat = 76
     static let actionButtonSize: CGFloat = 24
     static let actionsWidth: CGFloat = actionButtonSize * 2 + MuesliTheme.spacing8
 }
@@ -117,7 +118,7 @@ struct DictionaryView: View {
             Text("Replace")
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("Threshold")
-                .fixedSize()
+                .frame(width: DictionaryRowMetrics.thresholdWidth, alignment: .leading)
             Color.clear
                 .frame(width: DictionaryRowMetrics.actionsWidth)
         }
@@ -139,7 +140,7 @@ struct DictionaryView: View {
             TextField("Replace with", text: $newReplacement)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity)
-            ThresholdPicker(value: $newThreshold)
+            ThresholdEditor(value: $newThreshold)
             DictionaryIconButton(
                 systemName: "checkmark",
                 label: "Add word",
@@ -219,7 +220,7 @@ private struct DictionaryWordEditorRow: View {
             TextField("Replace with", text: $draftReplacement)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity)
-            ThresholdPicker(value: $draftThreshold)
+            ThresholdEditor(value: $draftThreshold)
             DictionaryIconButton(
                 systemName: "checkmark",
                 label: "Save word",
@@ -249,27 +250,24 @@ private struct DictionaryWordEditorRow: View {
     }
 }
 
-private struct ThresholdPicker: View {
+private struct ThresholdEditor: View {
     @Binding var value: Double
 
-    private static let steps: [Double] = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+    @State private var isPresented = false
+    @State private var draftPercent = ""
+
+    private static let bounds = 0.70...0.95
 
     var body: some View {
-        Menu {
-            ForEach(Self.steps, id: \.self) { step in
-                Button {
-                    value = step
-                } label: {
-                    HStack {
-                        Text(Self.label(for: step))
-                        if abs(Self.snap(value) - step) < 0.001 {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
+        Button {
+            draftPercent = Self.percentString(for: value)
+            isPresented = true
         } label: {
-            Text(Self.label(for: Self.snap(value)))
+            HStack(spacing: 3) {
+                Text(Self.label(for: value))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .padding(.horizontal, 8)
@@ -281,19 +279,87 @@ private struct ThresholdPicker: View {
                         .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
                 )
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .frame(width: DictionaryRowMetrics.thresholdWidth, alignment: .leading)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            thresholdPopover
+        }
         .help("Matching threshold")
         .accessibilityLabel("Matching threshold")
+        .accessibilityValue(Self.label(for: value))
     }
 
     private static func label(for value: Double) -> String {
         "\(Int(round(value * 100)))%"
     }
 
-    private static func snap(_ value: Double) -> Double {
-        let nearest = (value * 20).rounded() / 20 // round to nearest 0.05
-        return min(max(nearest, steps.first!), steps.last!)
+    private static func percentString(for value: Double) -> String {
+        "\(Int(round(clamp(value) * 100)))"
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, bounds.lowerBound), bounds.upperBound)
+    }
+
+    private var thresholdPopover: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack {
+                Text("Threshold")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                Spacer()
+                HStack(spacing: 4) {
+                    TextField("85", text: $draftPercent)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .frame(width: 48)
+                        .onSubmit(commitDraftPercent)
+                    Text("%")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+            }
+
+            Slider(
+                value: Binding(
+                    get: { Self.clamp(value) },
+                    set: { newValue in
+                        value = Self.clamp(newValue)
+                        draftPercent = Self.percentString(for: value)
+                    }
+                ),
+                in: Self.bounds,
+                step: 0.01
+            )
+            .tint(MuesliTheme.accent)
+
+            HStack {
+                Text("70%")
+                Spacer()
+                Text("95%")
+            }
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(MuesliTheme.textTertiary)
+        }
+        .padding(MuesliTheme.spacing16)
+        .frame(width: 240)
+        .onAppear {
+            draftPercent = Self.percentString(for: value)
+        }
+        .onChange(of: value) { _, newValue in
+            draftPercent = Self.percentString(for: newValue)
+        }
+    }
+
+    private func commitDraftPercent() {
+        let normalized = draftPercent.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "%", with: "")
+        guard let percent = Double(normalized) else {
+            draftPercent = Self.percentString(for: value)
+            return
+        }
+        value = Self.clamp(percent / 100)
+        draftPercent = Self.percentString(for: value)
     }
 }
 
