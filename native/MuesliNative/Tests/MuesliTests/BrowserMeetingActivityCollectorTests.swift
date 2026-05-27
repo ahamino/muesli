@@ -236,4 +236,28 @@ struct BrowserMeetingActivityCollectorTests {
         #expect(cached.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
         #expect(cached.first?.isFocused == false)
     }
+
+    @Test("non-refresh pass does not promote cached background room to focused")
+    func nonRefreshPassDoesNotPromoteCachedBackgroundRoomToFocused() async {
+        let collector = BrowserMeetingActivityCollector(
+            activeTabURLProvider: { _ in "https://meet.google.com/pwm-txwq-txy" }
+        )
+
+        _ = await collector.collect(
+            runningApps: [chrome(isActive: false)],
+            refresh: true,
+            now: now,
+            shouldAttemptActiveTabFallback: { _ in true }
+        )
+
+        let cached = await collector.collect(
+            runningApps: [chrome(isActive: true)],
+            refresh: false,
+            now: now.addingTimeInterval(1),
+            shouldAttemptActiveTabFallback: { _ in false }
+        )
+
+        #expect(cached.map(\.normalizedID) == ["googleMeet:meet.google.com/pwm-txwq-txy"])
+        #expect(cached.first?.isFocused == false)
+    }
 }

@@ -100,7 +100,11 @@ final class BrowserMeetingActivityCollector {
         guard shouldAttemptActiveTabFallback(app.bundleID) else {
             return .skipped
         }
-        guard let url = await activeTabURL(for: app) else {
+        let activeTabResult = await activeTabURL(for: app)
+        guard case .url(let url) = activeTabResult else {
+            if case .timedOut = activeTabResult {
+                return .skipped
+            }
             return .noMeeting
         }
         guard let normalized = MeetingURLNormalizer.normalize(url) else {
@@ -133,7 +137,7 @@ final class BrowserMeetingActivityCollector {
             url: cached.url,
             normalizedID: cached.normalizedID,
             platform: cached.platform,
-            isFocused: app?.isActive ?? false
+            isFocused: cached.isFocused && (app?.isActive ?? false)
         )
     }
 
@@ -179,21 +183,25 @@ final class BrowserMeetingActivityCollector {
         return MeetingURLNormalizer.normalize(rawURL)
     }
 
-    private func activeTabURL(for app: RunningAppSnapshot) async -> String? {
+    private func activeTabURL(for app: RunningAppSnapshot) async -> BrowserActiveTabProbeResult {
         if let activeTabURLProviderOverride {
-            return activeTabURLProviderOverride(app)
+            return activeTabURLProviderOverride(app).map(BrowserActiveTabProbeResult.url) ?? .noURL
         }
         return await Self.activeTabURLViaScriptingBridge(for: app, deadline: 2)
     }
 
-    private static func activeTabURLViaScriptingBridge(for app: RunningAppSnapshot, deadline: TimeInterval) async -> String? {
+    private static func activeTabURLViaScriptingBridge(
+        for app: RunningAppSnapshot,
+        deadline: TimeInterval
+    ) async -> BrowserActiveTabProbeResult {
         await withCheckedContinuation { continuation in
             let completion = BrowserActiveTabProbeCompletion(continuation)
             DispatchQueue.global(qos: .utility).async {
-                completion.resume(Self.activeTabURLViaScriptingBridgeSync(for: app))
+                let url = Self.activeTabURLViaScriptingBridgeSync(for: app)
+                completion.resume(url.map(BrowserActiveTabProbeResult.url) ?? .noURL)
             }
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + deadline) {
-                completion.resume(nil)
+                completion.resume(.timedOut)
             }
         }
     }
@@ -245,6 +253,12 @@ private enum BrowserMeetingURLProbeResult {
     case skipped
 }
 
+private enum BrowserActiveTabProbeResult {
+    case url(String)
+    case noURL
+    case timedOut
+}
+
 private struct CachedBrowserMeeting {
     let context: BrowserMeetingContext
     let observedAt: Date
@@ -258,13 +272,13 @@ private final class BrowserScriptingBridgeErrorDelegate: NSObject, SBApplication
 
 private final class BrowserActiveTabProbeCompletion: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<String?, Never>?
+    private var continuation: CheckedContinuation<BrowserActiveTabProbeResult, Never>?
 
-    init(_ continuation: CheckedContinuation<String?, Never>) {
+    init(_ continuation: CheckedContinuation<BrowserActiveTabProbeResult, Never>) {
         self.continuation = continuation
     }
 
-    func resume(_ value: String?) {
+    func resume(_ value: BrowserActiveTabProbeResult) {
         lock.lock()
         let continuation = continuation
         self.continuation = nil
