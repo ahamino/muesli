@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import SwiftUI
 import MuesliCore
@@ -181,6 +182,10 @@ struct SettingsView: View {
                 refreshDictationInputDevices()
                 refreshPermissionStatuses(refreshLaunchAtLogin: true)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard appState.selectedTab == .settings else { return }
+            refreshPermissionStatuses(refreshLaunchAtLogin: true)
         }
         .onChange(of: appState.selectedBackend) { _, _ in
             refreshDownloadedModelOptions()
