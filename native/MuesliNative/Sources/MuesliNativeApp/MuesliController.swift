@@ -292,6 +292,7 @@ final class MuesliController: NSObject {
     private var importTask: Task<Void, Never>?
     private var importSessionID: UUID?
     private var canceledMeetingStartIDs = Set<Int64>()
+    private var iCloudSyncTask: Task<Void, Never>?
     private var hasStarted = false
 
     init(
@@ -482,6 +483,9 @@ final class MuesliController: NSObject {
         preferencesWindowController = PreferencesWindowController(controller: self)
         historyWindowController = RecentHistoryWindowController(store: dictationStore, controller: self)
         refreshUI()
+        if config.iCloudSyncEnabled {
+            performICloudSync()
+        }
 
         meetingMonitor.calendarEventProvider = { [weak self] in
             self?.currentOrNearbyCachedCalendarEvent()
@@ -852,6 +856,7 @@ final class MuesliController: NSObject {
     }
 
     func updateConfig(_ mutate: (inout AppConfig) -> Void) {
+        let wasICloudSyncEnabled = config.iCloudSyncEnabled
         let previousHotkeyTriggerThresholdMS = config.hotkeyTriggerThresholdMS
         let previousComputerUseHotkeyTriggerThresholdMS = config.computerUseHotkeyTriggerThresholdMS
         let previousMeetingRecordingHotkeyTriggerThresholdMS = config.meetingRecordingHotkeyTriggerThresholdMS
@@ -897,6 +902,61 @@ final class MuesliController: NSObject {
         syncMeetingDetectionMonitor()
         updateMeetingNotificationVisibility()
         syncDictationRecorderWarmup(intent: .idlePrewarm(.configChange))
+        if !wasICloudSyncEnabled && config.iCloudSyncEnabled {
+            performICloudSync()
+        } else if wasICloudSyncEnabled && !config.iCloudSyncEnabled {
+            iCloudSyncTask?.cancel()
+            appState.iCloudSyncStatus = "iCloud sync is off."
+        }
+    }
+
+    func performICloudSync() {
+        guard config.iCloudSyncEnabled else {
+            appState.iCloudSyncStatus = "Turn on iCloud sync first."
+            return
+        }
+        guard iCloudSyncTask == nil else {
+            appState.iCloudSyncStatus = "Sync already in progress."
+            return
+        }
+        appState.iCloudSyncStatus = "Syncing with iCloud..."
+        let store = dictationStore
+        iCloudSyncTask = Task { [weak self] in
+            do {
+                let result = try await MuesliICloudSyncEngine().sync(store: store)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.iCloudSyncTask = nil
+                    let summary = self.formatICloudSyncSummary(result)
+                    self.appState.iCloudSyncStatus = "All text is up to date."
+                    self.appState.iCloudLastSyncSummary = summary
+                    self.appState.iCloudLastSyncedAt = result.syncedAt
+                    self.refreshUI()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.iCloudSyncTask = nil
+                    self.appState.iCloudSyncStatus = "Sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func formatICloudSyncSummary(_ result: ICloudSyncResult) -> String {
+        "\(formatICloudSyncCounts(result.uploaded)) up, \(formatICloudSyncCounts(result.downloaded)) down"
+    }
+
+    private func formatICloudSyncCounts(_ counts: ICloudSyncKindCounts) -> String {
+        guard counts.total > 0 else { return "0" }
+        var parts: [String] = []
+        if counts.dictations > 0 {
+            parts.append("\(counts.dictations) \(counts.dictations == 1 ? "dictation" : "dictations")")
+        }
+        if counts.meetings > 0 {
+            parts.append("\(counts.meetings) \(counts.meetings == 1 ? "meeting" : "meetings")")
+        }
+        return "\(counts.total) (\(parts.joined(separator: ", ")))"
     }
 
     func availableDictationInputDevices() -> [AudioInputDeviceInfo] {

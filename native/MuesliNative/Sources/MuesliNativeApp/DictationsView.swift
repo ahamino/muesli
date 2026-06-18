@@ -21,7 +21,6 @@ struct DictationsView: View {
     let appState: AppState
     let controller: MuesliController
     @State private var selectedFilter: DictationFilter = .all
-    private let iOSCompanionURL = URL(string: "https://github.com/Muesli-HQ/muesli-ios")!
 
     private var groupedDictations: [(header: String, records: [DictationRecord])] {
         let calendar = Calendar.current
@@ -190,7 +189,7 @@ struct DictationsView: View {
                 Text("Muesli for iPhone")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textPrimary)
-                Text("Capture offline meetings on iPhone and prepare private iCloud sync with this Mac.")
+                Text("Capture offline meetings on iPhone and sync text privately with this Mac.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .lineLimit(2)
@@ -199,9 +198,14 @@ struct DictationsView: View {
             Spacer(minLength: MuesliTheme.spacing12)
 
             Button {
-                NSWorkspace.shared.open(iOSCompanionURL)
+                controller.performICloudSync()
             } label: {
-                Text("Open")
+                HStack(spacing: 6) {
+                    Text("Sync now")
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 12, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -210,6 +214,8 @@ struct DictationsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             }
             .buttonStyle(.plain)
+            .disabled(!appState.config.iCloudSyncEnabled)
+            .help(appState.config.iCloudSyncEnabled ? "Sync text with iCloud" : "Turn on iCloud sync in Settings")
 
             Button {
                 controller.updateConfig { $0.showIOSCompanionPrompt = false }

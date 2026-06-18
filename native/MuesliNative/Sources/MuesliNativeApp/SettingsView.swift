@@ -53,6 +53,7 @@ struct SettingsView: View {
 
     private enum SettingsPane: String, CaseIterable, Identifiable {
         case general
+        case sync
         case dictation
         case computerUse
         case meetings
@@ -63,6 +64,7 @@ struct SettingsView: View {
         var title: String {
             switch self {
             case .general: return "General"
+            case .sync: return "Sync"
             case .dictation: return "Dictation"
             case .computerUse: return "Computer Use"
             case .meetings: return "Meetings"
@@ -298,7 +300,7 @@ struct SettingsView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 680)
+            .frame(width: 760)
             Spacer()
         }
     }
@@ -308,6 +310,8 @@ struct SettingsView: View {
         switch selectedPane {
         case .general:
             generalSettingsPane
+        case .sync:
+            syncSettingsPane
         case .dictation:
             dictationSettingsPane
         case .computerUse:
@@ -337,43 +341,6 @@ struct SettingsView: View {
                     settingsSwitch(isOn: appState.config.openDashboardOnLaunch) { newValue in
                         controller.updateConfig { $0.openDashboardOnLaunch = newValue }
                     }
-                }
-            }
-
-            settingsSection("Muesli iOS") {
-                settingsRow("Private iCloud sync") {
-                    settingsSwitch(isOn: appState.config.iCloudSyncEnabled) { newValue in
-                        controller.updateConfig { $0.iCloudSyncEnabled = newValue }
-                    }
-                }
-                settingsDescription("Prepare this Mac for opt-in sync with the iOS companion app. Transcription stays on-device; sync will use the user's private iCloud account.")
-
-                Divider().background(MuesliTheme.surfaceBorder)
-
-                settingsRow("Show iOS companion prompt") {
-                    settingsSwitch(isOn: appState.config.showIOSCompanionPrompt) { newValue in
-                        controller.updateConfig { $0.showIOSCompanionPrompt = newValue }
-                    }
-                }
-                settingsDescription("Keep a lightweight prompt available for users who want Muesli dictation and meeting capture on iPhone.")
-
-                Divider().background(MuesliTheme.surfaceBorder)
-
-                HStack(spacing: MuesliTheme.spacing12) {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                        Text("Muesli for iPhone")
-                            .font(MuesliTheme.body())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                        Text("Use iPhone for offline meetings, keyboard dictation, and future iCloud sync with this Mac.")
-                            .font(MuesliTheme.caption())
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: MuesliTheme.spacing16)
-                    actionButton("Open iOS app page") {
-                        NSWorkspace.shared.open(iOSCompanionURL)
-                    }
-                    .frame(width: controlWidth)
                 }
             }
 
@@ -424,6 +391,81 @@ struct SettingsView: View {
         .padding(.leading, MuesliTheme.spacing16)
         .padding(.trailing, MuesliTheme.spacing16)
         .padding(.bottom, MuesliTheme.spacing8)
+    }
+
+    private var syncSettingsPane: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
+            settingsSection("iCloud Text Sync") {
+                settingsRow("Private iCloud sync") {
+                    settingsSwitch(isOn: appState.config.iCloudSyncEnabled) { newValue in
+                        controller.updateConfig { $0.iCloudSyncEnabled = newValue }
+                    }
+                }
+                settingsDescription("Sync dictation text, meeting transcripts, notes, summaries, and manual notes with the iOS companion app through your private iCloud account. Audio recordings are never synced.")
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                HStack(spacing: MuesliTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text(syncStatusText)
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let lastSyncedText = syncLastSyncedText {
+                            Text("Last synced: \(lastSyncedText)")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                        }
+                    }
+                    Spacer(minLength: MuesliTheme.spacing16)
+                    actionButton("Sync now", systemImage: "arrow.triangle.2.circlepath") {
+                        controller.performICloudSync()
+                    }
+                    .frame(width: controlWidth)
+                    .disabled(!appState.config.iCloudSyncEnabled)
+                }
+            }
+
+            settingsSection("iOS Companion") {
+                settingsRow("Show iOS companion prompt") {
+                    settingsSwitch(isOn: appState.config.showIOSCompanionPrompt) { newValue in
+                        controller.updateConfig { $0.showIOSCompanionPrompt = newValue }
+                    }
+                }
+                settingsDescription("Keep a lightweight prompt available for users who want Muesli dictation and meeting capture on iPhone.")
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                HStack(spacing: MuesliTheme.spacing12) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        Text("Muesli for iPhone")
+                            .font(MuesliTheme.body())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                        Text("Use iPhone for offline meetings, keyboard dictation, and private text sync with this Mac.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: MuesliTheme.spacing16)
+                    actionButton("Open iOS app page") {
+                        NSWorkspace.shared.open(iOSCompanionURL)
+                    }
+                    .frame(width: controlWidth)
+                }
+            }
+        }
+    }
+
+    private var syncStatusText: String {
+        if !appState.config.iCloudSyncEnabled {
+            return "iCloud text sync is off."
+        }
+        return appState.iCloudSyncStatus ?? "Text sync is ready."
+    }
+
+    private var syncLastSyncedText: String? {
+        guard let date = appState.iCloudLastSyncedAt else { return nil }
+        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
     }
 
     private var dictationSettingsPane: some View {
@@ -2077,10 +2119,22 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func actionButton(_ title: String, role: ButtonRole? = nil, action: @escaping () -> Void) -> some View {
+    private func actionButton(
+        _ title: String,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         let isDestructive = role == .destructive
         Button(action: action) {
-            Text(title)
+            HStack(spacing: MuesliTheme.spacing8) {
+                Text(title)
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                }
+            }
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(isDestructive ? MuesliTheme.recording : MuesliTheme.textPrimary)
                 .frame(maxWidth: .infinity)

@@ -90,6 +90,9 @@ final class AppState {
     var googleCalendarListLoadState: GoogleCalendarListLoadState = .idle
     var sparkleUpdateStatus: SparkleUpdateStatus = .idle
     var sparkleLastCheckedAt: Date?
+    var iCloudSyncStatus: String?
+    var iCloudLastSyncSummary: String?
+    var iCloudLastSyncedAt: Date?
     var modelPreparationTitle: String?
     var modelPreparationDetail: String?
     var modelPreparationProgress: Double?

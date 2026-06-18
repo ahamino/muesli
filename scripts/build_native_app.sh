@@ -26,6 +26,7 @@ APP_DIR="$INSTALL_DIR/$APP_BUNDLE_NAME"
 DEFAULT_SIGN_IDENTITY="Developer ID Application: Pranav Hari Guruvayurappan (58W55QJ567)"
 SIGN_IDENTITY="${MUESLI_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 SKIP_SIGN="${MUESLI_SKIP_SIGN:-0}"
+PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 CODESIGN_TIMESTAMP="${MUESLI_CODESIGN_TIMESTAMP:---timestamp}"
 if [[ "$CODESIGN_TIMESTAMP" == "none" ]]; then
   CODESIGN_TIMESTAMP="--timestamp=none"
@@ -183,6 +184,14 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     exit 1
   fi
 
+  if [[ -n "$PROVISIONING_PROFILE" ]]; then
+    if [[ ! -f "$PROVISIONING_PROFILE" ]]; then
+      echo "Provisioning profile not found: $PROVISIONING_PROFILE" >&2
+      exit 1
+    fi
+    cp "$PROVISIONING_PROFILE" "$APP_DIR/Contents/embedded.provisionprofile"
+  fi
+
   # Sign all bundled frameworks, including nested Sparkle executables.
   find "$APP_DIR/Contents/MacOS" -maxdepth 1 -name "*.framework" -type d | while read -r framework; do
     if [[ "$(basename "$framework")" == "Sparkle.framework" ]]; then
@@ -222,7 +231,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     "$APP_DIR/Contents/MacOS/muesli-cli"
 
   # Sign the app bundle with hardened runtime, secure timestamp, and entitlements
-  ENTITLEMENTS="$ROOT/scripts/Muesli.entitlements"
+  ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
   codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" \

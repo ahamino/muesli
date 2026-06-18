@@ -126,6 +126,134 @@ struct DictationStoreTests {
         #expect(inserted.source == .audioImport)
     }
 
+    @Test("synced iOS dictation preserves source and is clean")
+    func syncedIOSDictationPreservesSource() throws {
+        let store = try makeStore()
+        let createdAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-1",
+            kind: .dictation,
+            text: "Captured on iPhone",
+            source: "ios",
+            createdAt: createdAt,
+            updatedAt: createdAt,
+            startedAt: createdAt.addingTimeInterval(-2),
+            endedAt: createdAt,
+            durationSeconds: 2,
+            wordCount: 3,
+            cloudChangeTag: "tag-1"
+        ))
+
+        let row = try #require(try store.recentDictations(limit: 1).first)
+        #expect(row.rawText == "Captured on iPhone")
+        #expect(row.source == "ios")
+        #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("local Mac dictation sync record uses macOS source")
+    func localMacDictationSyncRecordUsesMacOSSource() throws {
+        let store = try makeStore()
+        let endedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        _ = try store.insertDictation(
+            text: "Captured on Mac",
+            durationSeconds: 2,
+            source: "dictation",
+            startedAt: endedAt.addingTimeInterval(-2),
+            endedAt: endedAt
+        )
+
+        let record = try #require(try store.textRecordsNeedingSync().first { $0.kind == .dictation })
+        #expect(record.text == "Captured on Mac")
+        #expect(record.source == "macos")
+    }
+
+    @Test("local Mac meeting sync record uses macOS source")
+    func localMacMeetingSyncRecordUsesMacOSSource() throws {
+        let store = try makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        try store.insertMeeting(
+            title: "Mac Meeting",
+            calendarEventID: nil,
+            startTime: startedAt,
+            endTime: startedAt.addingTimeInterval(90),
+            rawTranscript: "Mac transcript",
+            formattedNotes: "Mac notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        let record = try #require(try store.textRecordsNeedingSync().first { $0.kind == .meeting })
+        #expect(record.title == "Mac Meeting")
+        #expect(record.source == "macos")
+    }
+
+    @Test("synced iOS meeting preserves source and excludes audio")
+    func syncedIOSMeetingPreservesSourceAndExcludesAudio() throws {
+        let store = try makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "meeting-ios-1",
+            kind: .meeting,
+            title: "iPhone Meeting",
+            text: "Speaker 1: shipped text only",
+            summaryText: "## Summary\nText only",
+            manualNotes: "- Follow up",
+            source: "ios",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(90),
+            durationSeconds: 90,
+            wordCount: 5,
+            cloudChangeTag: "tag-2"
+        ))
+
+        let meeting = try #require(try store.recentMeetings(limit: 1).first)
+        #expect(meeting.title == "iPhone Meeting")
+        #expect(meeting.rawTranscript == "Speaker 1: shipped text only")
+        #expect(meeting.formattedNotes == "## Summary\nText only")
+        #expect(meeting.manualNotes == "- Follow up")
+        #expect(meeting.source == .iOS)
+        #expect(meeting.micAudioPath == nil)
+        #expect(meeting.systemAudioPath == nil)
+        #expect(meeting.savedRecordingPath == nil)
+        #expect(try store.textRecordsNeedingSync().isEmpty)
+    }
+
+    @Test("unknown meeting source falls back to meeting")
+    func unknownMeetingSourceFallsBackToMeeting() throws {
+        let store = try makeStore()
+        var db: OpaquePointer?
+        #expect(sqlite3_open(store.databasePath().path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        INSERT INTO meetings (
+            title, start_time, end_time, duration_seconds, raw_transcript,
+            formatted_notes, word_count, source
+        )
+        VALUES ('Legacy', '2026-06-16T10:00:00Z', '2026-06-16T10:01:00Z', 60, 'Legacy text', '', 2, 'future_source')
+        """
+        #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+
+        let meeting = try #require(try store.recentMeetings(limit: 1).first)
+        #expect(meeting.source == .meeting)
+    }
+
+    @Test("sync origin badge labels cover iOS sources")
+    func syncOriginBadgeLabels() {
+        #expect(SyncOriginDisplay.badgeLabel(forDictationSource: "ios") == "iOS")
+        #expect(SyncOriginDisplay.badgeLabel(forDictationSource: " iOS ") == "iOS")
+        #expect(SyncOriginDisplay.badgeLabel(forDictationSource: "cua") == nil)
+        #expect(SyncOriginDisplay.badgeLabel(forMeetingSource: .iOS) == "iOS")
+        #expect(SyncOriginDisplay.badgeLabel(forMeetingSource: .audioImport) == nil)
+        #expect(SyncOriginDisplay.badgeLabel(forMeetingSource: .meeting) == nil)
+    }
+
     @Test("live meeting starts as recording with empty manual notes")
     func createLiveMeeting() throws {
         let store = try makeStore()
@@ -794,6 +922,37 @@ struct DictationStoreTests {
             try store.insertDictation(text: "Entry \(i)", durationSeconds: 1.0, startedAt: now.addingTimeInterval(Double(i)), endedAt: now.addingTimeInterval(Double(i) + 1))
         }
         #expect(try store.recentDictations(limit: 3).count == 3)
+    }
+
+    @Test("recent dictations sort by recorded timestamp instead of insert order")
+    func recentDictationsSortByRecordedTimestamp() throws {
+        let store = try makeStore()
+        let newer = Date(timeIntervalSince1970: 1_770_100_000)
+        let older = Date(timeIntervalSince1970: 1_770_000_000)
+
+        _ = try store.insertDictation(
+            text: "Newer Mac row",
+            durationSeconds: 1,
+            startedAt: newer.addingTimeInterval(-1),
+            endedAt: newer
+        )
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-older",
+            kind: .dictation,
+            text: "Older iOS row",
+            source: "ios",
+            createdAt: older,
+            updatedAt: Date(timeIntervalSince1970: 1_770_200_000),
+            startedAt: older.addingTimeInterval(-1),
+            endedAt: older,
+            durationSeconds: 1,
+            wordCount: 3,
+            cloudChangeTag: "tag-older"
+        ))
+
+        let rows = try store.recentDictations(limit: 2)
+
+        #expect(rows.map(\.rawText) == ["Newer Mac row", "Older iOS row"])
     }
 
     @Test("recent dictations treats fromDate as a bound value, not SQL")
