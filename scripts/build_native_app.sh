@@ -232,10 +232,35 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
 
   # Sign the app bundle with hardened runtime, secure timestamp, and entitlements
   ENTITLEMENTS="${MUESLI_ENTITLEMENTS:-$ROOT/scripts/Muesli.entitlements}"
+  CODESIGN_ENTITLEMENTS="$ENTITLEMENTS"
+  TEMP_ENTITLEMENTS=""
+  APS_ENVIRONMENT="${MUESLI_APS_ENVIRONMENT:-}"
+  if [[ -z "$APS_ENVIRONMENT" && -n "$PROVISIONING_PROFILE" ]]; then
+    PROFILE_PLIST="$(mktemp "${TMPDIR:-/tmp}/muesli-profile.XXXXXX.plist")"
+    if security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null; then
+      APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
+      if [[ -z "$APS_ENVIRONMENT" ]]; then
+        APS_ENVIRONMENT="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$PROFILE_PLIST" 2>/dev/null || true)"
+      fi
+    fi
+    rm -f "$PROFILE_PLIST"
+  fi
+  if [[ -n "$APS_ENVIRONMENT" ]]; then
+    TEMP_ENTITLEMENTS="$(mktemp "${TMPDIR:-/tmp}/muesli-entitlements.XXXXXX.plist")"
+    cp "$ENTITLEMENTS" "$TEMP_ENTITLEMENTS"
+    if ! /usr/libexec/PlistBuddy -c "Set :com.apple.developer.aps-environment $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS" 2>/dev/null; then
+      /usr/libexec/PlistBuddy -c "Add :com.apple.developer.aps-environment string $APS_ENVIRONMENT" "$TEMP_ENTITLEMENTS"
+    fi
+    CODESIGN_ENTITLEMENTS="$TEMP_ENTITLEMENTS"
+    echo "Using APNs entitlement: com.apple.developer.aps-environment=$APS_ENVIRONMENT"
+  fi
   codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
-    --entitlements "$ENTITLEMENTS" \
+    --entitlements "$CODESIGN_ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" \
     "$APP_DIR"
+  if [[ -n "$TEMP_ENTITLEMENTS" ]]; then
+    rm -f "$TEMP_ENTITLEMENTS"
+  fi
 
   # Deep-verify entire bundle — fail fast if any component has an invalid signature
   echo "Verifying deep signature..."
