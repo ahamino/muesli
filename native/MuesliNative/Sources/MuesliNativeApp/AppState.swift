@@ -91,6 +91,8 @@ final class AppState {
     var sparkleUpdateStatus: SparkleUpdateStatus = .idle
     var sparkleLastCheckedAt: Date?
     var iCloudSyncStatus: String?
+    var isICloudSyncInProgress: Bool = false
+    var isICloudBridgeActivationPending: Bool = false
     var iCloudLastSyncSummary: String?
     var iCloudLastSyncedAt: Date?
     var modelPreparationTitle: String?

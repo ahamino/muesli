@@ -192,10 +192,10 @@ struct DictationsView: View {
 
     private var bridgeState: BridgeState {
         let status = appState.iCloudSyncStatus?.lowercased() ?? ""
-        if status.contains("checking icloud") {
+        if appState.isICloudBridgeActivationPending && !appState.config.iCloudSyncEnabled {
             return .checkingICloud
         }
-        if status.contains("syncing") || status.contains("setting up") || status.contains("preparing") {
+        if appState.isICloudSyncInProgress {
             return .syncing
         }
         if status.contains("needs icloud") {
