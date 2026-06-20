@@ -180,33 +180,8 @@ struct DictationsView: View {
         }
     }
 
-    private enum BridgeState {
-        case notConfigured
-        case checkingICloud
-        case syncing
-        case active
-        case needsICloud
-        case error
-    }
-
-    private var bridgeState: BridgeState {
-        let status = appState.iCloudSyncStatus?.lowercased() ?? ""
-        if appState.isICloudBridgeActivationPending && !appState.config.iCloudSyncEnabled {
-            return .checkingICloud
-        }
-        if appState.isICloudSyncInProgress {
-            return .syncing
-        }
-        if status.contains("needs icloud") {
-            return .needsICloud
-        }
-        if status.contains("failed") {
-            return .error
-        }
-        if appState.config.iCloudSyncEnabled {
-            return .active
-        }
-        return .notConfigured
+    private var bridgeState: ICloudBridgeState {
+        appState.iCloudBridgeState
     }
 
     private var iPhoneBridgeCard: some View {
@@ -344,7 +319,7 @@ struct DictationsView: View {
         case .syncing:
             return "Creating the sync channel and pulling your latest text records."
         case .needsICloud, .error:
-            return appState.iCloudSyncStatus ?? "Open iCloud settings, then try again."
+            return appState.iCloudBridgeMessage ?? "Open iCloud settings, then try again."
         case .notConfigured:
             return "Your Muesli history follows you through private iCloud. Audio stays local."
         }

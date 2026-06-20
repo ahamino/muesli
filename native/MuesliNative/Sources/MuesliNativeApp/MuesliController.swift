@@ -757,6 +757,7 @@ final class MuesliController: NSObject {
         appState.isGoogleCalendarAvailable = googleCalAuth.isAvailable
         appState.isGoogleCalendarVerified = googleCalAuth.isVerified
         appState.isGoogleCalendarAuthenticated = googleCalAuth.isAuthenticated
+        refreshICloudBridgeStateForConfig()
         // Keep appState in sync with persisted hidden event IDs
         let persisted = Set(config.hiddenCalendarEventIDs)
         if appState.hiddenCalendarEventIDs != persisted {
@@ -958,6 +959,8 @@ final class MuesliController: NSObject {
         bridgeActivationPending = true
         appState.isICloudBridgeActivationPending = true
         appState.iCloudSyncStatus = "Checking iCloud..."
+        appState.iCloudBridgeState = .checkingICloud
+        appState.iCloudBridgeMessage = nil
         TelemetryDeck.signal("bridge_enable_started", parameters: ["platform": "macos"])
 
         iCloudSyncGeneration += 1
@@ -971,6 +974,8 @@ final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.hasEnsuredICloudSubscription = true
                     self.appState.iCloudSyncStatus = "Setting up private iCloud sync..."
+                    self.appState.iCloudBridgeState = .syncing
+                    self.appState.iCloudBridgeMessage = nil
                     self.updateConfig { $0.iCloudSyncEnabled = true }
                 }
             } catch is CancellationError {
@@ -979,6 +984,7 @@ final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.bridgeActivationPending = false
                     self.appState.isICloudBridgeActivationPending = false
+                    self.refreshICloudBridgeStateForConfig()
                 }
             } catch {
                 await MainActor.run {
@@ -986,7 +992,14 @@ final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.bridgeActivationPending = false
                     self.appState.isICloudBridgeActivationPending = false
-                    self.appState.iCloudSyncStatus = "Sync needs iCloud: \(error.localizedDescription)"
+                    let message = error.localizedDescription
+                    self.appState.iCloudSyncStatus = "Sync needs iCloud: \(message)"
+                    if MuesliICloudSyncEngine.isICloudAccountAvailabilityError(error) {
+                        self.appState.iCloudBridgeState = .needsICloud
+                    } else {
+                        self.appState.iCloudBridgeState = .error
+                    }
+                    self.appState.iCloudBridgeMessage = message
                     TelemetryDeck.signal(
                         "bridge_enable_failed",
                         parameters: ["platform": "macos", "reason": String(describing: type(of: error))]
@@ -1084,10 +1097,14 @@ final class MuesliController: NSObject {
             if userInitiated {
                 appState.iCloudSyncStatus = "Turn on iCloud sync first."
             }
+            appState.iCloudBridgeState = .notConfigured
+            appState.iCloudBridgeMessage = nil
             return
         }
         guard iCloudSyncTask == nil else {
             appState.isICloudSyncInProgress = true
+            appState.iCloudBridgeState = .syncing
+            appState.iCloudBridgeMessage = nil
             if userInitiated {
                 appState.iCloudSyncStatus = "Sync already in progress."
             }
@@ -1100,6 +1117,8 @@ final class MuesliController: NSObject {
         enableICloudPersistentSync()
         appState.isICloudSyncInProgress = true
         appState.iCloudSyncStatus = "Syncing with private iCloud..."
+        appState.iCloudBridgeState = .syncing
+        appState.iCloudBridgeMessage = nil
         let store = dictationStore
         iCloudSyncGeneration += 1
         let generation = iCloudSyncGeneration
@@ -1119,6 +1138,8 @@ final class MuesliController: NSObject {
                     self.appState.iCloudSyncStatus = result.downloaded.total > 0
                         ? "Synced with iPhone."
                         : "All text is up to date."
+                    self.appState.iCloudBridgeState = .active
+                    self.appState.iCloudBridgeMessage = nil
                     self.appState.iCloudLastSyncSummary = summary
                     self.appState.iCloudLastSyncedAt = result.syncedAt
                     if result.downloaded.total > 0 {
@@ -1150,13 +1171,21 @@ final class MuesliController: NSObject {
                         self.bridgeActivationPending = false
                         self.appState.isICloudBridgeActivationPending = false
                     }
+                    self.refreshICloudBridgeStateForConfig()
                 }
             } catch {
                 await MainActor.run {
                     guard let self, self.iCloudSyncGeneration == generation else { return }
                     self.iCloudSyncTask = nil
                     self.appState.isICloudSyncInProgress = false
-                    self.appState.iCloudSyncStatus = "Sync failed: \(error.localizedDescription)"
+                    let message = error.localizedDescription
+                    self.appState.iCloudSyncStatus = "Sync failed: \(message)"
+                    if MuesliICloudSyncEngine.isICloudAccountAvailabilityError(error) {
+                        self.appState.iCloudBridgeState = .needsICloud
+                    } else {
+                        self.appState.iCloudBridgeState = .error
+                    }
+                    self.appState.iCloudBridgeMessage = message
                     if self.bridgeActivationPending {
                         self.bridgeActivationPending = false
                         self.appState.isICloudBridgeActivationPending = false
@@ -1179,6 +1208,7 @@ final class MuesliController: NSObject {
             bridgeActivationPending = false
             appState.isICloudBridgeActivationPending = false
         }
+        refreshICloudBridgeStateForConfig()
     }
 
     private func disableICloudSyncRuntimeState() {
@@ -1187,15 +1217,41 @@ final class MuesliController: NSObject {
         iCloudSyncDebounceTask = nil
         iCloudSubscriptionTask?.cancel()
         iCloudSubscriptionTask = nil
+        resetICloudSubscriptionState()
         bridgeActivationPending = false
         appState.isICloudBridgeActivationPending = false
         appState.iCloudSyncStatus = "iCloud sync is off."
+        appState.iCloudBridgeState = .notConfigured
+        appState.iCloudBridgeMessage = nil
     }
 
     private func resetICloudSubscriptionState() {
         iCloudSubscriptionTask?.cancel()
         iCloudSubscriptionTask = nil
         hasEnsuredICloudSubscription = false
+    }
+
+    private func refreshICloudBridgeStateForConfig() {
+        if appState.isICloudBridgeActivationPending {
+            appState.iCloudBridgeState = .checkingICloud
+            return
+        }
+        if appState.isICloudSyncInProgress {
+            appState.iCloudBridgeState = .syncing
+            return
+        }
+        if !config.iCloudSyncEnabled {
+            appState.iCloudBridgeState = .notConfigured
+            appState.iCloudBridgeMessage = nil
+            return
+        }
+        switch appState.iCloudBridgeState {
+        case .needsICloud, .error:
+            return
+        case .notConfigured, .checkingICloud, .syncing, .active:
+            appState.iCloudBridgeState = .active
+            appState.iCloudBridgeMessage = nil
+        }
     }
 
     private func formatICloudSyncSummary(_ result: ICloudSyncResult) -> String {

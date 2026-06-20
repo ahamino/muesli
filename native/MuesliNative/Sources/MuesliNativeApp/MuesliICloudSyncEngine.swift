@@ -187,6 +187,10 @@ final class MuesliICloudSyncEngine {
         return notification.subscriptionID == Schema.textSubscriptionID
     }
 
+    static func isICloudAccountAvailabilityError(_ error: Error) -> Bool {
+        error is ICloudSyncAccountError
+    }
+
     @discardableResult
     func ensureSyncZone() async throws -> Bool {
         do {
