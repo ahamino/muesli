@@ -346,6 +346,62 @@ struct DictationStoreTests {
         #expect(tombstone.isDeleted)
     }
 
+    @Test("dirty sync queue reports remaining records after a full page")
+    func dirtySyncQueueReportsRemainingRecordsAfterFullPage() throws {
+        let store = try makeStore()
+        let baseDate = Date(timeIntervalSince1970: 1_770_000_000)
+
+        for index in 0..<205 {
+            let endedAt = baseDate.addingTimeInterval(TimeInterval(index))
+            _ = try store.insertDictation(
+                text: "Dirty dictation \(index)",
+                durationSeconds: 1,
+                startedAt: endedAt.addingTimeInterval(-1),
+                endedAt: endedAt
+            )
+        }
+        try store.insertMeeting(
+            title: "Dirty meeting",
+            calendarEventID: nil,
+            startTime: baseDate.addingTimeInterval(1_000),
+            endTime: baseDate.addingTimeInterval(1_060),
+            rawTranscript: "Meeting text",
+            formattedNotes: "Meeting notes",
+            micAudioPath: nil,
+            systemAudioPath: nil
+        )
+
+        let firstPage = try store.textRecordsNeedingSync(limit: 200)
+        #expect(firstPage.count == 200)
+        #expect(firstPage.allSatisfy { $0.kind == .dictation })
+        #expect(try store.hasTextRecordsNeedingSync())
+
+        for record in firstPage {
+            #expect(try store.markTextRecordSynced(
+                kind: record.kind,
+                recordName: record.id,
+                changeTag: "tag-\(record.id)",
+                recordUpdatedAt: record.updatedAt
+            ))
+        }
+
+        #expect(try store.hasTextRecordsNeedingSync())
+        let secondPage = try store.textRecordsNeedingSync(limit: 200)
+        #expect(secondPage.count == 6)
+        #expect(secondPage.contains { $0.kind == .meeting && $0.title == "Dirty meeting" })
+
+        for record in secondPage {
+            #expect(try store.markTextRecordSynced(
+                kind: record.kind,
+                recordName: record.id,
+                changeTag: "tag-\(record.id)",
+                recordUpdatedAt: record.updatedAt
+            ))
+        }
+        let hasPendingAfterSecondPage = try store.hasTextRecordsNeedingSync()
+        #expect(hasPendingAfterSecondPage == false)
+    }
+
     @Test("deleted sync cloud records omit text content fields")
     func deletedSyncCloudRecordsOmitTextContentFields() throws {
         let deletedAt = Date(timeIntervalSince1970: 1_770_000_000)

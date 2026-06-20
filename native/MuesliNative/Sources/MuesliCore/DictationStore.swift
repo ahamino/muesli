@@ -1422,6 +1422,17 @@ public final class DictationStore {
         return records
     }
 
+    public func hasTextRecordsNeedingSync() throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        try ensureCloudRecordNames(db: db)
+
+        if try hasDirtyTextRecords(table: "dictations", db: db) {
+            return true
+        }
+        return try hasDirtyTextRecords(table: "meetings", db: db)
+    }
+
     public func textRecordsForSyncMigration(
         kind: SyncTextRecordKind,
         limit: Int = 500,
@@ -1507,6 +1518,21 @@ public final class DictationStore {
             records.append(record)
         }
         return records
+    }
+
+    private func hasDirtyTextRecords(table: String, db: OpaquePointer?) throws -> Bool {
+        let sql = """
+        SELECT 1
+        FROM \(table)
+        WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
+        LIMIT 1
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_step(statement) == SQLITE_ROW
     }
 
     @discardableResult

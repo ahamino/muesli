@@ -24,6 +24,7 @@ struct ICloudSyncResult: Equatable {
     let uploaded: ICloudSyncKindCounts
     let downloaded: ICloudSyncKindCounts
     let hasPendingUploads: Bool
+    let syncZoneWasRecreated: Bool
     let syncedAt: Date
 }
 
@@ -119,6 +120,8 @@ final class MuesliICloudSyncEngine {
     private let database: CKDatabase
     private let changeTokenStore: ICloudChangeTokenStore
     private let defaults: UserDefaults
+    private static let dirtyUploadBatchSize = 200
+    private static let maxDirtyUploadBatchesPerSync = 50
 
     init(
         container: CKContainer = CKContainer(identifier: Schema.containerIdentifier),
@@ -133,7 +136,7 @@ final class MuesliICloudSyncEngine {
 
     func sync(store: DictationStore) async throws -> ICloudSyncResult {
         try await verifyAccountAvailable()
-        try await ensureSyncZone()
+        let syncZoneWasRecreated = try await ensureSyncZone()
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteChanges = try await fetchChangedTextRecords()
@@ -148,39 +151,20 @@ final class MuesliICloudSyncEngine {
             changeTokenStore.saveToken(finalToken)
         }
 
-        let dirtyRecords = try store.textRecordsNeedingSync()
-        var dirtyRecordsByName: [String: SyncTextRecord] = [:]
-        for dirtyRecord in dirtyRecords {
-            dirtyRecordsByName[dirtyRecord.id] = dirtyRecord
-        }
-        let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
-        var uploaded = ICloudSyncKindCounts()
-        var hasPendingUploads = false
-        for savedRecord in savedRecords {
-            let recordName = savedRecord.recordID.recordName
-            guard let kind = Self.kind(from: savedRecord),
-                  let dirtyRecord = dirtyRecordsByName[recordName] else { continue }
-            uploaded.increment(kind)
-            let didMarkSynced = try store.markTextRecordSynced(
-                kind: kind,
-                recordName: recordName,
-                changeTag: savedRecord.recordChangeTag,
-                recordUpdatedAt: dirtyRecord.updatedAt
-            )
-            hasPendingUploads = hasPendingUploads || !didMarkSynced
-        }
+        let uploadResult = try await uploadDirtyTextRecords(store: store)
 
         return ICloudSyncResult(
-            uploaded: uploaded,
+            uploaded: uploadResult.uploaded,
             downloaded: downloaded,
-            hasPendingUploads: hasPendingUploads,
+            hasPendingUploads: uploadResult.hasPendingUploads,
+            syncZoneWasRecreated: syncZoneWasRecreated,
             syncedAt: Date()
         )
     }
 
     func ensureTextRecordSubscription() async throws {
         try await verifyAccountAvailable()
-        try await ensureSyncZone()
+        _ = try await ensureSyncZone()
         do {
             _ = try await fetchSubscription(id: Schema.textSubscriptionID)
             return
@@ -203,14 +187,17 @@ final class MuesliICloudSyncEngine {
         return notification.subscriptionID == Schema.textSubscriptionID
     }
 
-    func ensureSyncZone() async throws {
+    @discardableResult
+    func ensureSyncZone() async throws -> Bool {
         do {
             _ = try await fetchZone(id: Schema.syncZoneID)
+            return false
         } catch {
             guard Self.isSyncZoneMissing(error) else { throw error }
             _ = try await save(zone: CKRecordZone(zoneName: Schema.syncZoneName))
             changeTokenStore.clearToken()
             defaults.set(false, forKey: Schema.migratedDefaultZoneKey)
+            return true
         }
     }
 
@@ -336,6 +323,52 @@ final class MuesliICloudSyncEngine {
                 offset += records.count
             }
         }
+    }
+
+    private func uploadDirtyTextRecords(store: DictationStore) async throws -> (
+        uploaded: ICloudSyncKindCounts,
+        hasPendingUploads: Bool
+    ) {
+        var uploaded = ICloudSyncKindCounts()
+
+        for _ in 0..<Self.maxDirtyUploadBatchesPerSync {
+            let dirtyRecords = try store.textRecordsNeedingSync(limit: Self.dirtyUploadBatchSize)
+            guard !dirtyRecords.isEmpty else {
+                return (uploaded, false)
+            }
+
+            var dirtyRecordsByName: [String: SyncTextRecord] = [:]
+            for dirtyRecord in dirtyRecords {
+                dirtyRecordsByName[dirtyRecord.id] = dirtyRecord
+            }
+
+            let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+            guard !savedRecords.isEmpty else {
+                return (uploaded, try store.hasTextRecordsNeedingSync())
+            }
+
+            var markedRecordCount = 0
+            for savedRecord in savedRecords {
+                let recordName = savedRecord.recordID.recordName
+                guard let kind = Self.kind(from: savedRecord),
+                      let dirtyRecord = dirtyRecordsByName[recordName] else { continue }
+                uploaded.increment(kind)
+                if try store.markTextRecordSynced(
+                    kind: kind,
+                    recordName: recordName,
+                    changeTag: savedRecord.recordChangeTag,
+                    recordUpdatedAt: dirtyRecord.updatedAt
+                ) {
+                    markedRecordCount += 1
+                }
+            }
+
+            guard markedRecordCount > 0 else {
+                return (uploaded, try store.hasTextRecordsNeedingSync())
+            }
+        }
+
+        return (uploaded, try store.hasTextRecordsNeedingSync())
     }
 
     private func fetchTextRecordsPage(cursor: CKQueryOperation.Cursor?) async throws -> ICloudQueryPage {

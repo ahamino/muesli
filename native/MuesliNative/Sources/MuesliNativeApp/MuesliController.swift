@@ -1122,6 +1122,10 @@ final class MuesliController: NSObject {
                         self.appState.isICloudBridgeActivationPending = false
                         TelemetryDeck.signal("bridge_enable_completed", parameters: ["platform": "macos"])
                     }
+                    if result.syncZoneWasRecreated {
+                        self.resetICloudSubscriptionState()
+                        self.ensureICloudSubscription()
+                    }
                     self.refreshUI()
                     if result.hasPendingUploads {
                         self.scheduleICloudSync(delay: 0.2, userInitiated: false)
@@ -1165,6 +1169,12 @@ final class MuesliController: NSObject {
             bridgeActivationPending = false
             appState.isICloudBridgeActivationPending = false
         }
+    }
+
+    private func resetICloudSubscriptionState() {
+        iCloudSubscriptionTask?.cancel()
+        iCloudSubscriptionTask = nil
+        hasEnsuredICloudSubscription = false
     }
 
     private func formatICloudSyncSummary(_ result: ICloudSyncResult) -> String {
