@@ -354,7 +354,7 @@ final class MuesliICloudSyncEngine {
                 dirtyRecordsByName[dirtyRecord.id] = dirtyRecord
             }
 
-            let savedRecords = try await save(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
+            let savedRecords = try await saveInBatches(records: dirtyRecords.map(Self.syncZoneCloudRecord(from:)))
             guard !savedRecords.isEmpty else {
                 return (uploaded, try store.hasTextRecordsNeedingSync())
             }

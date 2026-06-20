@@ -1101,6 +1101,11 @@ final class MuesliController: NSObject {
         iCloudSyncTask = Task { [weak self] in
             do {
                 let result = try await MuesliICloudSyncEngine().sync(store: store)
+                do {
+                    _ = try store.purgeSoftDeletedTextRecords()
+                } catch {
+                    fputs("[muesli-native] failed to purge old iCloud tombstones: \(error)\n", stderr)
+                }
                 await MainActor.run {
                     guard let self, self.iCloudSyncGeneration == generation else { return }
                     self.iCloudSyncTask = nil
