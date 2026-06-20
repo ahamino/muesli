@@ -312,7 +312,7 @@ struct DictionaryCorrectionDetector {
                 compactObserved,
                 compactReplacement
             )
-            return compactSimilarity >= 0.82 || hasSpecialDictionarySignal
+            return compactSimilarity >= 0.82
         }
 
         if commonWords.contains(normalizedObserved) {
@@ -334,7 +334,7 @@ struct DictionaryCorrectionDetector {
             return false
         }
 
-        return similarity >= minimumCorrectionSimilarity || hasSpecialDictionarySignal
+        return similarity >= minimumCorrectionSimilarity
     }
 
     private static func isCommonWordTruncation(observed: String, replacement: String) -> Bool {

@@ -41,6 +41,17 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion?.replacement == "Alwarpet")
     }
 
+    @Test("detects close hyphenated split merge corrections")
+    func detectsCloseHyphenatedSplitMergeCorrection() {
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: "please route this to sc domain",
+            editedText: "please route this to sc-domain"
+        )
+
+        #expect(suggestion?.observed == "sc domain")
+        #expect(suggestion?.replacement == "sc-domain")
+    }
+
     @Test("detects muesli corrections from latest failure shape")
     func detectsMuesliCorrectionFromLatestFailureShape() {
         let original = "No, typically I think the word muzzle is the worst toughest one for it to transcribe because it usually transcribes to the one starting with the w letter N instead of just muzzli."
@@ -162,6 +173,16 @@ struct DictionaryCorrectionDetectorTests {
         let suggestion = DictionaryCorrectionDetector.suggestion(
             originalText: "please look up spelling correction",
             editedText: "please look file_00000000f4ac61f4841155122554864c-sanitized spelling correction"
+        )
+
+        #expect(suggestion == nil)
+    }
+
+    @Test("does not let punctuation alone make unrelated words suggestions")
+    func skipsUnrelatedHyphenatedReplacement() {
+        let suggestion = DictionaryCorrectionDetector.suggestion(
+            originalText: "Please review the Vitruvian design note",
+            editedText: "Please review the follow-up design note"
         )
 
         #expect(suggestion == nil)
