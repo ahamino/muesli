@@ -79,6 +79,16 @@ enum MeetingCompletionNotificationPolicy {
     }
 }
 
+enum MuesliBridgeDeviceRefreshPolicy {
+    static func shouldForceRefresh(
+        userInitiated: Bool,
+        bridgeActivationPending: Bool,
+        hasKnownRemoteDevice: Bool
+    ) -> Bool {
+        userInitiated || bridgeActivationPending || !hasKnownRemoteDevice
+    }
+}
+
 struct PendingMeetingCompletionNotification {
     let meetingID: Int64?
     let title: String
@@ -1127,7 +1137,11 @@ final class MuesliController: NSObject {
         let generation = iCloudSyncGeneration
         iCloudSyncTask = Task { [weak self] in
             do {
-                let forceBridgeDeviceRefresh = userInitiated || self?.bridgeActivationPending == true
+                let forceBridgeDeviceRefresh = MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+                    userInitiated: userInitiated,
+                    bridgeActivationPending: self?.bridgeActivationPending == true,
+                    hasKnownRemoteDevice: MuesliBridgeDeviceIdentity.hasRemoteDevice()
+                )
                 let result = try await MuesliICloudSyncEngine().sync(
                     store: store,
                     forceBridgeDeviceRefresh: forceBridgeDeviceRefresh

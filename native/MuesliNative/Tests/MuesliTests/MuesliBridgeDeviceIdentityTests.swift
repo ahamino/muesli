@@ -203,3 +203,42 @@ struct MuesliBridgeDeviceIdentityTests {
         #expect(defaults.string(forKey: DefaultsKey.localDeviceID) == first.deviceID)
     }
 }
+
+@Suite("MuesliBridgeDeviceRefreshPolicy")
+struct MuesliBridgeDeviceRefreshPolicyTests {
+    @Test("user initiated sync forces bridge device refresh")
+    func userInitiatedSyncForcesBridgeDeviceRefresh() {
+        #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+            userInitiated: true,
+            bridgeActivationPending: false,
+            hasKnownRemoteDevice: true
+        ))
+    }
+
+    @Test("pending bridge activation forces bridge device refresh")
+    func pendingBridgeActivationForcesBridgeDeviceRefresh() {
+        #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+            userInitiated: false,
+            bridgeActivationPending: true,
+            hasKnownRemoteDevice: true
+        ))
+    }
+
+    @Test("app activation forces bridge device refresh until a remote device is known")
+    func appActivationForcesRefreshUntilRemoteDeviceIsKnown() {
+        #expect(MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+            userInitiated: false,
+            bridgeActivationPending: false,
+            hasKnownRemoteDevice: false
+        ))
+    }
+
+    @Test("background sync uses throttle after remote device is known")
+    func backgroundSyncUsesThrottleAfterRemoteDeviceIsKnown() {
+        #expect(!MuesliBridgeDeviceRefreshPolicy.shouldForceRefresh(
+            userInitiated: false,
+            bridgeActivationPending: false,
+            hasKnownRemoteDevice: true
+        ))
+    }
+}
