@@ -185,6 +185,7 @@ final class MuesliController: NSObject {
     private static let maxDictionarySuggestions = 50
     private static let pendingDictionaryCorrectionPromptsEnableKey = "settings.pendingDictionaryCorrectionPromptsEnable"
     private static let pendingDictionaryCorrectionPromptsRequestedAtKey = "settings.pendingDictionaryCorrectionPromptsRequestedAt"
+    private static let pendingDictionaryCorrectionPromptsEnableTimeout: TimeInterval = 15 * 60
 
     private let runtime: RuntimePaths
     private let configStore = ConfigStore()
@@ -2052,6 +2053,10 @@ final class MuesliController: NSObject {
 
     func reconcilePendingDictionaryCorrectionPromptsEnable() {
         guard UserDefaults.standard.bool(forKey: Self.pendingDictionaryCorrectionPromptsEnableKey) else { return }
+        if isPendingDictionaryCorrectionPromptsEnableExpired {
+            clearPendingDictionaryCorrectionPromptsEnable()
+            return
+        }
         guard AXIsProcessTrusted() else { return }
         clearPendingDictionaryCorrectionPromptsEnable()
         updateConfig { $0.enableDictionaryCorrectionPrompts = true }
@@ -2065,6 +2070,12 @@ final class MuesliController: NSObject {
     private func clearPendingDictionaryCorrectionPromptsEnable() {
         UserDefaults.standard.removeObject(forKey: Self.pendingDictionaryCorrectionPromptsEnableKey)
         UserDefaults.standard.removeObject(forKey: Self.pendingDictionaryCorrectionPromptsRequestedAtKey)
+    }
+
+    private var isPendingDictionaryCorrectionPromptsEnableExpired: Bool {
+        let requestedAt = UserDefaults.standard.double(forKey: Self.pendingDictionaryCorrectionPromptsRequestedAtKey)
+        guard requestedAt > 0 else { return true }
+        return Date().timeIntervalSince1970 - requestedAt > Self.pendingDictionaryCorrectionPromptsEnableTimeout
     }
 
     @discardableResult

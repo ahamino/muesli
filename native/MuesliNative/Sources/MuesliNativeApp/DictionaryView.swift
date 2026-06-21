@@ -34,9 +34,6 @@ struct DictionaryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(MuesliTheme.backgroundBase)
-        .onAppear {
-            controller.reconcilePendingDictionaryCorrectionPromptsEnable()
-        }
         .alert("Enable Accessibility?", isPresented: $isShowingAccessibilityPrompt) {
             Button("Cancel", role: .cancel) {}
             Button("Enable") {

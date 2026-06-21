@@ -1507,7 +1507,6 @@ struct SettingsView: View {
         accessibilityGranted = AXIsProcessTrusted()
         inputMonitoringGranted = CGPreflightListenEventAccess()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
-        controller.reconcilePendingDictionaryCorrectionPromptsEnable()
         if refreshLaunchAtLogin {
             controller.refreshLaunchAtLoginState()
         }
