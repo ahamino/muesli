@@ -40,6 +40,9 @@ actor TranscriptionCoordinator {
     }
 
     private var _nemotron35Transcriber: Any?
+    /// Selected Nemotron 3.5 language prompt id (101 = auto). Stored so it survives
+    /// lazy (re)creation of the transcriber and is applied whenever it loads.
+    private var nemotron35PromptId: Int32 = 101
 
     @available(macOS 15, *)
     private var nemotron35Transcriber: Nemotron35StreamingTranscriber {
@@ -49,10 +52,22 @@ actor TranscriptionCoordinator {
         return _nemotron35Transcriber as! Nemotron35StreamingTranscriber
     }
 
-    /// Public accessor for streaming dictation (Nemotron 3.5 multilingual).
+    /// Public accessor for streaming dictation (Nemotron 3.5 multilingual). Applies
+    /// the currently-selected language prompt id before returning.
     @available(macOS 15, *)
-    func getNemotron35Transcriber() -> Nemotron35StreamingTranscriber {
-        return nemotron35Transcriber
+    func getNemotron35Transcriber() async -> Nemotron35StreamingTranscriber {
+        let transcriber = nemotron35Transcriber
+        await transcriber.setPromptId(nemotron35PromptId)
+        return transcriber
+    }
+
+    /// Set the Nemotron 3.5 language prompt id (from app config). Applies to the
+    /// live transcriber if it already exists.
+    func setNemotron35PromptId(_ id: Int32) async {
+        nemotron35PromptId = id
+        if #available(macOS 15, *), let t = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
+            await t.setPromptId(id)
+        }
     }
 
     @available(macOS 15, *)
@@ -220,6 +235,7 @@ actor TranscriptionCoordinator {
             }
         case "nemotron35":
             if #available(macOS 15, *) {
+                await nemotron35Transcriber.setPromptId(nemotron35PromptId)
                 try await nemotron35Transcriber.loadModels(progress: progress)
                 // Warmup ANE so first dictation starts instantly
                 fputs("[muesli-native] Nemotron 3.5 warmup: running silent chunk for ANE compilation...\n", stderr)

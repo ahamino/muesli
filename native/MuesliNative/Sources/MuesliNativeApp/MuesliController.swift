@@ -949,6 +949,9 @@ final class MuesliController: NSObject {
         }
         Task { [weak self] in
             guard let self else { return }
+            // Push the selected Nemotron 3.5 language before preload so the loaded
+            // transcriber is conditioned on the right prompt_id.
+            await self.transcriptionCoordinator.setNemotron35PromptId(self.config.resolvedNemotron35Language.promptId)
             let needsWarmup = option.backend == "whisper"
             if needsWarmup {
                 await MainActor.run {
@@ -976,6 +979,14 @@ final class MuesliController: NSObject {
                 self.statusBarController?.refresh()
                 self.historyWindowController?.updateBackendLabel()
             }
+        }
+    }
+
+    /// Update the Nemotron 3.5 dictation language and push the prompt_id to the runtime.
+    func setNemotron35Language(_ language: Nemotron35Language) {
+        updateConfig { $0.nemotron35Language = language.rawValue }
+        Task { [weak self] in
+            await self?.transcriptionCoordinator.setNemotron35PromptId(language.promptId)
         }
     }
 

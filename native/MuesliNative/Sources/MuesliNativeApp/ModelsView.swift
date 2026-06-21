@@ -5,6 +5,7 @@ struct ModelsView: View {
     let appState: AppState
     let controller: MuesliController
 
+    @State private var nemotron35UpdateAvailable = false
     @State private var downloadingModels: Set<String> = []
     @State private var downloadProgress: [String: Double] = [:]
     @State private var downloadedModels: Set<String> = []
@@ -94,6 +95,7 @@ struct ModelsView: View {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
             syncSelectionsFromActiveBackend()
+            checkNemotron35Update()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -194,6 +196,13 @@ struct ModelsView: View {
         Binding(
             get: { appState.config.resolvedCohereLanguage },
             set: { controller.selectCohereLanguage($0) }
+        )
+    }
+
+    private var nemotron35LanguageSelection: Binding<Nemotron35Language> {
+        Binding(
+            get: { appState.config.resolvedNemotron35Language },
+            set: { controller.setNemotron35Language($0) }
         )
     }
 
@@ -694,6 +703,39 @@ struct ModelsView: View {
                 }
             }
 
+            if option.backend == BackendOption.nemotron35Multilingual.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: nemotron35LanguageSelection) {
+                        ForEach(Nemotron35Language.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                }
+
+                if isDownloaded && nemotron35UpdateAvailable && !isDownloading {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MuesliTheme.accent)
+                        Text("A newer model build is available.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                        Button("Update") { updateNemotron35(option) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(MuesliTheme.accent)
+                    }
+                }
+            }
+
             // Progress bar when downloading
             if isDownloading {
                 VStack(alignment: .leading, spacing: 4) {
@@ -958,6 +1000,19 @@ struct ModelsView: View {
         }
     }
 
+    /// Re-download Nemotron 3.5 to pick up a newer upstream build: delete the cached
+    /// files (so the download isn't skipped), then start a fresh download.
+    private func updateNemotron35(_ option: BackendOption) {
+        Task {
+            await deleteModelFiles(option)
+            await MainActor.run {
+                downloadedModels.remove(option.model)
+                nemotron35UpdateAvailable = false
+                startDownload(option)
+            }
+        }
+    }
+
     private func deleteModel(_ option: BackendOption) {
         if appState.selectedBackend == option {
             let fallback = downloadedModels
@@ -1020,6 +1075,17 @@ struct ModelsView: View {
             if isModelDownloaded(option, fm: fm) {
                 downloadedModels.insert(option.model)
             }
+        }
+    }
+
+    /// Background check: does FluidInference's repo have a newer commit than what's
+    /// installed for Nemotron 3.5? Never auto-downloads — just surfaces a badge.
+    private func checkNemotron35Update() {
+        guard #available(macOS 15, *),
+              isModelDownloaded(.nemotron35Multilingual, fm: FileManager.default) else { return }
+        Task {
+            let available = await Nemotron35StreamingTranscriber.updateAvailable()
+            await MainActor.run { nemotron35UpdateAvailable = available }
         }
     }
 

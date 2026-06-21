@@ -23,19 +23,25 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     private var tokenizer: [Int: String] = [:]
     private var loaded = false
 
+    /// Selected language `prompt_id` fed to the encoder (101 = auto-detect).
+    /// Set from app config via `setPromptId(_:)` before dictation.
+    private var promptId: Int32 = 101
+
     /// Multilingual config from metadata.json (multilingual/2240ms variant).
     /// Geometry: chunk_mel_frames 224 + pre_encode_cache 9 = total 233; 8× subsampling
     /// → 28 encoder frames/chunk; chunkSamples = 2240ms · 16kHz = 35840.
-    private let config = NemotronRNNTConfig(
-        chunkSamples: 35840,
-        cacheChannelFrames: 42,      // att_context left
-        totalMelFrames: 233,
-        encoderDim: 1024,
-        decoderHiddenSize: 640,
-        blankTokenId: 13087,         // = vocab_size (last logit index)
-        promptId: 101,               // auto-detect language
-        stripAngleBracketTags: true  // drop <lang>/<unk> tags the model emits
-    )
+    private var config: NemotronRNNTConfig {
+        NemotronRNNTConfig(
+            chunkSamples: 35840,
+            cacheChannelFrames: 42,      // att_context left
+            totalMelFrames: 233,
+            encoderDim: 1024,
+            decoderHiddenSize: 640,
+            blankTokenId: 13087,         // = vocab_size (last logit index)
+            promptId: promptId,          // selected language (auto = 101)
+            stripAngleBracketTags: true  // drop <lang>/<unk> tags the model emits
+        )
+    }
 
     typealias StreamState = RNNTStreamState
     typealias TranscriberError = NemotronRNNTError
@@ -43,6 +49,11 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
     /// Samples per streaming chunk — read cross-actor by the runtime/controller to
     /// size the audio buffer (must match config.chunkSamples).
     nonisolated let chunkSamples = 35840
+
+    /// Set the language prompt id used for subsequent transcriptions.
+    func setPromptId(_ id: Int32) {
+        promptId = id
+    }
 
     // MARK: - Model Loading
 
@@ -137,8 +148,36 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
 
     // MARK: - Model Download
 
-    private static let repoID = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
+    static let repoID = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
     private static let variantPath = "multilingual/2240ms"
+    private static var revisionFile: URL { cacheDir.appendingPathComponent(".revision") }
+
+    // MARK: - Update detection
+
+    /// The HuggingFace commit sha recorded when the model was last downloaded, if any.
+    nonisolated static func installedRevision() -> String? {
+        guard let s = try? String(contentsOf: revisionFile, encoding: .utf8) else { return nil }
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The repo's current `main` commit sha (one lightweight HF API call), or nil on failure.
+    static func fetchRemoteRevision() async -> String? {
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sha = obj["sha"] as? String else { return nil }
+        return sha
+    }
+
+    /// True only when a model is installed with a known revision that differs from the
+    /// repo's current `main`. Returns false when nothing is installed, the revision is
+    /// unknown (downloaded before this was tracked), or the network check fails — so it
+    /// never produces a false "update available".
+    static func updateAvailable() async -> Bool {
+        guard let local = installedRevision(), let remote = await fetchRemoteRevision() else { return false }
+        return local != remote
+    }
 
     private func ensureModelsDownloaded(progress: ((Double, String?) -> Void)? = nil) async throws -> URL {
         let modelDir = Self.cacheDir
@@ -160,6 +199,11 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
         ) {
             filesDownloaded += 1
             progress?(min(Double(filesDownloaded) / 30.0, 0.95), "Downloading Nemotron 3.5 model...")
+        }
+
+        // Record the repo revision so we can later detect upstream updates.
+        if let sha = await Self.fetchRemoteRevision() {
+            try? sha.write(to: Self.revisionFile, atomically: true, encoding: .utf8)
         }
 
         fputs("[nemotron35] download complete\n", stderr)

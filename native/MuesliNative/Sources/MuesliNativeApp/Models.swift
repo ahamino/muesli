@@ -201,6 +201,75 @@ struct BackendOption: Equatable {
     }
 }
 
+/// Language selection for the Nemotron 3.5 multilingual backend. Maps to the
+/// model's `prompt_id` encoder input (from the FluidInference `metadata.json`
+/// `prompt_dictionary`). `auto` (101) lets the model detect the language.
+enum Nemotron35Language: String, CaseIterable, Codable, Sendable {
+    case auto
+    case english = "en"
+    case hindi = "hi"
+    case spanish = "es"
+    case french = "fr"
+    case german = "de"
+    case italian = "it"
+    case portuguese = "pt"
+    case chinese = "zh"
+    case japanese = "ja"
+    case korean = "ko"
+    case russian = "ru"
+    case arabic = "ar"
+
+    static let defaultLanguage: Self = .auto
+
+    /// `prompt_id` value fed to the encoder. 101 = auto-detect.
+    var promptId: Int32 {
+        switch self {
+        case .auto: return 101
+        case .english: return 0
+        case .hindi: return 6
+        case .spanish: return 3
+        case .french: return 8
+        case .german: return 9
+        case .italian: return 15
+        case .portuguese: return 13
+        case .chinese: return 4
+        case .japanese: return 10
+        case .korean: return 14
+        case .russian: return 11
+        case .arabic: return 7
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto-detect"
+        case .english: return "English"
+        case .hindi: return "Hindi"
+        case .spanish: return "Spanish"
+        case .french: return "French"
+        case .german: return "German"
+        case .italian: return "Italian"
+        case .portuguese: return "Portuguese"
+        case .chinese: return "Chinese"
+        case .japanese: return "Japanese"
+        case .korean: return "Korean"
+        case .russian: return "Russian"
+        case .arabic: return "Arabic"
+        }
+    }
+
+    static func resolved(_ rawValue: String?) -> Self {
+        guard let rawValue, let language = Self(rawValue: rawValue) else {
+            return defaultLanguage
+        }
+        return language
+    }
+
+    static func resolvedCode(_ rawValue: String?) -> String {
+        resolved(rawValue).rawValue
+    }
+}
+
 struct SummaryModelPreset {
     let id: String
     let label: String
@@ -727,6 +796,7 @@ struct AppConfig: Codable {
     var sttModel: String = BackendOption.whisper.model
     var dictationInputDeviceUID: String? = nil
     var cohereLanguage: String = CohereTranscribeLanguage.defaultLanguage.rawValue
+    var nemotron35Language: String = Nemotron35Language.defaultLanguage.rawValue
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
@@ -807,6 +877,7 @@ struct AppConfig: Codable {
         case sttModel = "stt_model"
         case dictationInputDeviceUID = "dictation_input_device_uid"
         case cohereLanguage = "cohere_language"
+        case nemotron35Language = "nemotron35_language"
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
@@ -894,6 +965,7 @@ struct AppConfig: Codable {
         sttModel = (try? c.decode(String.self, forKey: .sttModel)) ?? defaults.sttModel
         dictationInputDeviceUID = try? c.decode(String.self, forKey: .dictationInputDeviceUID)
         cohereLanguage = CohereTranscribeLanguage.resolvedCode(try? c.decode(String.self, forKey: .cohereLanguage))
+        nemotron35Language = Nemotron35Language.resolvedCode(try? c.decode(String.self, forKey: .nemotron35Language))
         meetingTranscriptionBackend = (try? c.decode(String.self, forKey: .meetingTranscriptionBackend)) ?? sttBackend
         meetingTranscriptionModel = (try? c.decode(String.self, forKey: .meetingTranscriptionModel)) ?? sttModel
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
@@ -984,6 +1056,10 @@ struct AppConfig: Codable {
 
     var resolvedCohereLanguage: CohereTranscribeLanguage {
         CohereTranscribeLanguage.resolved(cohereLanguage)
+    }
+
+    var resolvedNemotron35Language: Nemotron35Language {
+        Nemotron35Language.resolved(nemotron35Language)
     }
 
     var resolvedOnboardingUseCase: OnboardingUseCase {

@@ -918,3 +918,52 @@ struct Nemotron35BackendMetadataTests {
         #expect(BackendOption.nemotron35Multilingual.backend == "nemotron35")
     }
 }
+
+@Suite("Nemotron35 language selection")
+struct Nemotron35LanguageTests {
+
+    @Test("prompt ids match the model's prompt_dictionary")
+    func promptIds() {
+        #expect(Nemotron35Language.auto.promptId == 101)
+        #expect(Nemotron35Language.english.promptId == 0)
+        #expect(Nemotron35Language.hindi.promptId == 6)
+        #expect(Nemotron35Language.spanish.promptId == 3)
+        #expect(Nemotron35Language.chinese.promptId == 4)
+        #expect(Nemotron35Language.japanese.promptId == 10)
+    }
+
+    @Test("default is auto-detect")
+    func defaultIsAuto() {
+        #expect(Nemotron35Language.defaultLanguage == .auto)
+        #expect(Nemotron35Language.defaultLanguage.promptId == 101)
+    }
+
+    @Test("resolved falls back to auto for unknown/nil")
+    func resolvedFallback() {
+        #expect(Nemotron35Language.resolved("hi") == .hindi)
+        #expect(Nemotron35Language.resolved(nil) == .auto)
+        #expect(Nemotron35Language.resolved("not-a-language") == .auto)
+        #expect(Nemotron35Language.resolvedCode("hi") == "hi")
+        #expect(Nemotron35Language.resolvedCode(nil) == "auto")
+    }
+
+    @Test("every language has a non-empty label and is unique by prompt id sense")
+    func labelsAndCoverage() {
+        for lang in Nemotron35Language.allCases {
+            #expect(!lang.label.isEmpty)
+        }
+        // Hindi requires the multilingual track — it must be offered.
+        #expect(Nemotron35Language.allCases.contains(.hindi))
+    }
+
+    @Test("config persists the selected language via snake_case key")
+    func configRoundTrip() throws {
+        var cfg = AppConfig()
+        cfg.nemotron35Language = Nemotron35Language.hindi.rawValue
+        let data = try JSONEncoder().encode(cfg)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["nemotron35_language"] as? String == "hi")
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.resolvedNemotron35Language == .hindi)
+    }
+}
