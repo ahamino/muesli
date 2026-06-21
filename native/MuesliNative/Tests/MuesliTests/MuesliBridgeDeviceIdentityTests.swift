@@ -211,11 +211,15 @@ struct MuesliBridgeDeviceIdentityTests {
         #expect(defaults.string(forKey: DefaultsKey.remoteDevicePlatform) == "iOS")
     }
 
-    @Test("updateRemoteDevices falls back to remote Mac when no companion exists")
-    func updateRemoteDevicesFallsBackToRemoteMacWhenNoCompanionExists() throws {
+    @Test("updateRemoteDevices clears remote bridge when no companion exists")
+    func updateRemoteDevicesClearsRemoteBridgeWhenNoCompanionExists() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set("local-mac", forKey: DefaultsKey.localDeviceID)
+        defaults.set("previous-iphone", forKey: DefaultsKey.remoteDeviceID)
+        defaults.set("Previous iPhone", forKey: DefaultsKey.remoteDeviceName)
+        defaults.set("iOS", forKey: DefaultsKey.remoteDevicePlatform)
+        defaults.set(Date(timeIntervalSince1970: 1_769_999_000), forKey: DefaultsKey.remoteDeviceLastSeenAt)
         let now = Date(timeIntervalSince1970: 1_770_000_000)
         let olderMac = bridgeRecord(
             deviceID: "remote-mac-old",
@@ -235,9 +239,10 @@ struct MuesliBridgeDeviceIdentityTests {
             defaults: defaults
         )
 
-        #expect(defaults.string(forKey: DefaultsKey.remoteDeviceID) == "remote-mac-new")
-        #expect(defaults.string(forKey: DefaultsKey.remoteDeviceName) == "New MacBook")
-        #expect(defaults.string(forKey: DefaultsKey.remoteDevicePlatform) == "macOS")
+        #expect(defaults.object(forKey: DefaultsKey.remoteDeviceID) == nil)
+        #expect(defaults.object(forKey: DefaultsKey.remoteDeviceName) == nil)
+        #expect(defaults.object(forKey: DefaultsKey.remoteDevicePlatform) == nil)
+        #expect(defaults.object(forKey: DefaultsKey.remoteDeviceLastSeenAt) == nil)
     }
 
     @Test("snapshot returns nil when required fields are missing")

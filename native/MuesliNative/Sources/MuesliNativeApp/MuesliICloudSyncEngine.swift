@@ -172,8 +172,8 @@ enum MuesliBridgeDeviceIdentity {
             .compactMap(Self.snapshot(from:))
             .filter { $0.deviceID != localID }
 
-        let candidateDevices = remoteDevices.filter { isCompanionPlatform($0.platform) }
-        let latestRemote = (candidateDevices.isEmpty ? remoteDevices : candidateDevices)
+        let latestRemote = remoteDevices
+            .filter { isCompanionPlatform($0.platform) }
             .max { $0.lastSeenAt < $1.lastSeenAt }
 
         guard let latestRemote else {
