@@ -561,6 +561,7 @@ struct ModelsView: View {
         case "cohere": return "cohere-logo"
         case "qwen": return "qwen-logo"
         case "nemotron": return "nvidia-logo"
+        case "nemotron35": return "nvidia-logo"
         case "canary": return "qwen-logo"
         default: return nil
         }
@@ -982,6 +983,10 @@ struct ModelsView: View {
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cache/muesli/models/nemotron-560ms")
             try? fm.removeItem(at: path)
+        case "nemotron35":
+            let path = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms")
+            try? fm.removeItem(at: path)
         case "canary":
             try? fm.removeItem(at: CanaryQwenModelStore.cacheDirectory())
         case "cohere":
@@ -1038,6 +1043,10 @@ struct ModelsView: View {
         case "nemotron":
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cache/muesli/models/nemotron-560ms/encoder/encoder_int8.mlmodelc")
+            return fm.fileExists(atPath: path.path)
+        case "nemotron35":
+            let path = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
             return fm.fileExists(atPath: path.path)
         case "fluidaudio":
             // Check FluidAudio's cache

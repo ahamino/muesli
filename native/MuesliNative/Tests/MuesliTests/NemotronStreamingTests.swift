@@ -782,23 +782,27 @@ struct NemotronBackendMetadataTests {
 @Suite("Nemotron hold-to-talk block policy")
 struct NemotronHoldToTalkPolicyTests {
 
-    @Test("nemotron is the only backend blocked from hold-to-talk")
-    func onlyNemotronIsBlocked() {
-        // MuesliController.handleStart() checks `selectedBackend.backend == "nemotron"`
-        // to intercept hold-to-talk and route users to handsfree mode instead.
-        let blocked = BackendOption.all.filter { $0.backend == "nemotron" }
-        #expect(blocked.count == 1)
-        #expect(blocked[0] == .nemotronStreaming)
+    // MuesliController.handleStart() checks `isStreamingDictationBackend`
+    // (backend == "nemotron" || "nemotron35") to intercept hold-to-talk and
+    // route users to handsfree mode instead.
+    private static let streamingBackends: Set<String> = ["nemotron", "nemotron35"]
+
+    @Test("both Nemotron streaming variants are blocked from hold-to-talk")
+    func streamingBackendsAreBlocked() {
+        let blocked = BackendOption.all.filter { Self.streamingBackends.contains($0.backend) }
+        #expect(blocked.count == 2)
+        #expect(blocked.contains(.nemotronStreaming))
+        #expect(blocked.contains(.nemotron35Multilingual))
     }
 
-    @Test("all non-nemotron backends are allowed in hold-to-talk")
-    func nonNemotronBackendsAllowHoldToTalk() {
-        let allowed = BackendOption.all.filter { $0.backend != "nemotron" }
+    @Test("all non-streaming backends are allowed in hold-to-talk")
+    func nonStreamingBackendsAllowHoldToTalk() {
+        let allowed = BackendOption.all.filter { !Self.streamingBackends.contains($0.backend) }
         for backend in allowed {
-            #expect(backend.backend != "nemotron",
+            #expect(!Self.streamingBackends.contains(backend.backend),
                     "\(backend.label) should not be blocked from hold-to-talk")
         }
-        #expect(allowed.count == BackendOption.all.count - 1)
+        #expect(allowed.count == BackendOption.all.count - 2)
     }
 
     @MainActor
@@ -839,5 +843,85 @@ struct TranscriptionCoordinatorNemotronTests {
         let transcriber = await coordinator.getNemotronTranscriber()
         let state = try? await transcriber.makeStreamState()
         #expect(state != nil)
+    }
+
+    @available(macOS 15, *)
+    @Test("getNemotron35Transcriber returns valid instance via lazy init")
+    func nemotron35LazyInit() async {
+        let coordinator = TranscriptionCoordinator()
+        let transcriber = await coordinator.getNemotron35Transcriber()
+        let state = try? await transcriber.makeStreamState()
+        #expect(state != nil)
+    }
+}
+
+@Suite("Nemotron35 backend")
+struct Nemotron35StreamStateTests {
+
+    @available(macOS 15, *)
+    @Test("makeStreamState uses the 3.5 multilingual cache shapes")
+    func makeStreamStateShapes() async throws {
+        let transcriber = Nemotron35StreamingTranscriber()
+        let state = try await transcriber.makeStreamState()
+
+        // 3.5 att_context left = 42 (EN backend uses 70)
+        #expect(state.cacheChannel.shape == [1, 24, 42, 1024])
+        #expect(state.cacheTime.shape == [1, 24, 1024, 8])
+        #expect(state.cacheLen.shape == [1])
+        #expect(state.hState.shape == [2, 1, 640])
+        #expect(state.cState.shape == [2, 1, 640])
+        #expect(state.lastToken == 0)
+        #expect(state.allTokens.isEmpty)
+        #expect(state.cacheLen[0].intValue == 0)
+    }
+
+    @available(macOS 15, *)
+    @Test("transcribeChunk throws when models not loaded")
+    func chunkThrowsWithoutModels() async throws {
+        let transcriber = Nemotron35StreamingTranscriber()
+        var state = try await transcriber.makeStreamState()
+        let samples = [Float](repeating: 0, count: transcriber.chunkSamples)
+
+        await #expect(throws: (any Error).self) {
+            try await transcriber.transcribeChunk(samples: samples, state: &state)
+        }
+    }
+
+    @available(macOS 15, *)
+    @Test("chunkSamples matches the 2240ms tier")
+    func chunkSamplesTier() {
+        let transcriber = Nemotron35StreamingTranscriber()
+        #expect(transcriber.chunkSamples == 35840)  // 2240ms * 16kHz
+    }
+
+    @available(macOS 15, *)
+    @Test("3.5 transcriber conforms to the streaming protocol and drives the controller")
+    func conformsToStreamingProtocol() {
+        let transcriber = Nemotron35StreamingTranscriber()
+        // Protocol-typed init + chunkSamples override compiles and constructs.
+        let _: NemotronStreamingTranscribing = transcriber
+        let _ = StreamingDictationController(
+            transcriber: transcriber as NemotronStreamingTranscribing,
+            chunkSamples: 35840
+        )
+    }
+}
+
+@Suite("Nemotron35 backend metadata")
+struct Nemotron35BackendMetadataTests {
+
+    @Test("nemotron35 description warns about limitations and lists languages")
+    func descriptionWarnings() {
+        let desc = BackendOption.nemotron35Multilingual.description
+        #expect(desc.contains("Experimental"))
+        #expect(desc.contains("Handsfree"))
+        #expect(desc.contains("Multilingual"))
+        #expect(desc.contains("Hindi"))
+        #expect(desc.contains("punctuation"))
+    }
+
+    @Test("nemotron35 backend identifier is nemotron35")
+    func backendId() {
+        #expect(BackendOption.nemotron35Multilingual.backend == "nemotron35")
     }
 }

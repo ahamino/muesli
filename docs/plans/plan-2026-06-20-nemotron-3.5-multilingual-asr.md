@@ -1,8 +1,31 @@
 # Plan: Add Nemotron 3.5 Multilingual Streaming ASR as a model option
 
-**Date:** 2026-06-20
+**Date:** 2026-06-20 (verified & implemented 2026-06-21)
 **Branch:** `claude/nemotron-asr-streaming-msek2t`
-**Status:** Spec only — no code written. Author this in a Mac-side session with HuggingFace network access (this remote env blocks `huggingface.co` egress and cannot build/run CoreML).
+**Status:** §5 unknowns verified against the live FluidInference repo on a Mac; implementing.
+
+---
+
+## 0. VERIFIED FACTS (2026-06-21, from the live repo — supersede §2/§5 guesses)
+
+Repo: `FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML` (sha 2d4cd16).
+
+- **Layout:** `{latin,multilingual}/{560,1120,2240,4480}ms/` each with `encoder.mlmodelc`, `decoder.mlmodelc`, `joint.mlmodelc`, `decoder_joint.mlmodelc` (fused, unused by us), `preprocessor.mlmodelc`, `tokenizer.json`, `metadata.json`. Repo root has `config.json` (empty `{}`) + `manifest.json`. **No 80/320ms variants** (plan's 320ms default was wrong).
+- **Tracks:** `latin` = vocab 2828, en/es/fr/it/pt/de. `multilingual` = vocab 13087, +zh/ja/100+ via prompt_id. Encoder (566MB) is byte-identical across tracks; decoder/joint differ.
+- **DECISION: ship `multilingual` @ `2240ms`** (FluidInference's `recommended_tier_ms`). Reason: Hindi requires the multilingual track (latin tokenizer has 1 incidental Devanagari token; multilingual has 196; `hi`→prompt_id 6). Bundle ≈ 665MB.
+- **Tokenizer:** plain `tokenizer.json` = `{ "id": "piece" }` — **same format as the EN backend**. Punctuation (`.`,`,`,`?`) is in-vocab → drop punctuation stripping. Space marker `▁`. Special/lang-tag pieces look like `<unk>`, `<en-US>`, `<bg-BG>` → strip any `^<…>$` piece on decode.
+- **Encoder I/O (same input names as EN + one new input):**
+  - in: `cache_channel fp32 [1,24,42,1024]`, `cache_len int32 [1]`, `cache_time fp32 [1,24,1024,8]`, `mel fp32 [1,128,233]`, `mel_length int32 [1]`, **`prompt_id int32 [1]`** (NEW — language; auto-detect sentinel = **101**, default).
+  - out: `encoded`, `encoded_length`, `cache_channel_out`, `cache_time_out`, `cache_len_out`.
+  - Cache layout is the **same ordering as EN**, just sizes 42 vs 70 (att_context `[42,13]`). No `pre_cache` input; no cache renames.
+- **decoder I/O** (identical to EN): in `c_in [2,1,640]`, `h_in [2,1,640]`, `token int32 [1,1]`, `token_length int32 [1]` → out `decoder_out`, `h_out`, `c_out`.
+- **joint I/O** (identical to EN): in `decoder [1,640,1]`, `encoder [1,1024,1]` → out `logits`. (We use decoder+joint separately, exactly as EN — ignore the fused `decoder_joint`.)
+- **preprocessor I/O** (identical to EN): in `audio fp32 [1,?]` (flex up to 1.28M), `audio_length int32 [1]` → out `mel`, `mel_length`.
+- **Geometry (multilingual/2240ms metadata.json):** sample_rate 16000, mel_features 128, chunk_mel_frames 224, pre_encode_cache 9, total_mel_frames 233, 8× subsample → 28 encoder frames/chunk, chunkSamples = 2240·16 = **35840**. encoder_dim 1024, decoder_hidden 640, decoder_layers 2.
+- **Vocab/blank:** vocab_size 13087, **blank_idx 13087** (= logits dim 13088). default_prompt_id 101, num_prompts 128.
+- **License:** `openmdw-1.1` / NVIDIA Software-and-Model Evaluation License. Base ships en/es/fr/it/pt/de/zh/ja in card languages.
+
+Net effect: the 3.5 backend is a near-clone of the EN backend (same I/O feature names, same decode loop, same tokenizer format, same download helpers) — only cache *sizes*, vocab/blank, chunk geometry, the added `prompt_id` input, and the `<…>` strip differ. `StreamState` is structurally identical, so the new transcriber reuses `NemotronStreamingTranscriber.StreamState` and conforms to the existing `NemotronStreamingTranscribing` protocol unchanged. `StreamingDictationController` only needs a configurable `chunkSamples`.
 
 ---
 

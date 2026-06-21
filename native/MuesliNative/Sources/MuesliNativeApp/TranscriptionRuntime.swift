@@ -39,6 +39,22 @@ actor TranscriptionCoordinator {
         return nemotronTranscriber
     }
 
+    private var _nemotron35Transcriber: Any?
+
+    @available(macOS 15, *)
+    private var nemotron35Transcriber: Nemotron35StreamingTranscriber {
+        if _nemotron35Transcriber == nil {
+            _nemotron35Transcriber = Nemotron35StreamingTranscriber()
+        }
+        return _nemotron35Transcriber as! Nemotron35StreamingTranscriber
+    }
+
+    /// Public accessor for streaming dictation (Nemotron 3.5 multilingual).
+    @available(macOS 15, *)
+    func getNemotron35Transcriber() -> Nemotron35StreamingTranscriber {
+        return nemotron35Transcriber
+    }
+
     @available(macOS 15, *)
     private var qwen3Transcriber: Qwen3AsrTranscriber {
         if _qwen3Transcriber == nil {
@@ -202,6 +218,20 @@ actor TranscriptionCoordinator {
                     NSLocalizedDescriptionKey: "Nemotron requires macOS 15 or later.",
                 ])
             }
+        case "nemotron35":
+            if #available(macOS 15, *) {
+                try await nemotron35Transcriber.loadModels(progress: progress)
+                // Warmup ANE so first dictation starts instantly
+                fputs("[muesli-native] Nemotron 3.5 warmup: running silent chunk for ANE compilation...\n", stderr)
+                var state = try await nemotron35Transcriber.makeStreamState()
+                let silence = [Float](repeating: 0, count: nemotron35Transcriber.chunkSamples)
+                _ = try? await nemotron35Transcriber.transcribeChunk(samples: silence, state: &state)
+                fputs("[muesli-native] Nemotron 3.5 warmup complete\n", stderr)
+            } else {
+                throw NSError(domain: "MuesliTranscriptionRuntime", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
+                ])
+            }
         case "qwen":
             if #available(macOS 15, *) {
                 try await qwen3Transcriber.loadModels(progress: progress)
@@ -343,6 +373,9 @@ actor TranscriptionCoordinator {
         await whisperTranscriber.shutdown()
         if #available(macOS 15, *) {
             await nemotronTranscriber.shutdown()
+            if let nemotron35 = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
+                await nemotron35.shutdown()
+            }
             await qwen3Transcriber.shutdown()
             if let postProcessor = _qwen3PostProcessor as? Qwen3PostProcessor {
                 await postProcessor.shutdown()
@@ -445,6 +478,8 @@ actor TranscriptionCoordinator {
             return try await transcribeWithWhisperKit(url: url)
         case "nemotron":
             return try await transcribeWithNemotron(url: url)
+        case "nemotron35":
+            return try await transcribeWithNemotron35(url: url)
         case "qwen":
             return try await transcribeWithQwen3(url: url)
         case "canary":
@@ -559,6 +594,23 @@ actor TranscriptionCoordinator {
         } else {
             throw NSError(domain: "Muesli", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Nemotron requires macOS 15 or later.",
+            ])
+        }
+    }
+
+    private func transcribeWithNemotron35(url: URL) async throws -> SpeechTranscriptionResult {
+        if #available(macOS 15, *) {
+            fputs("[muesli-native] transcribing with Nemotron 3.5: \(url.lastPathComponent)\n", stderr)
+            let result = try await nemotron35Transcriber.transcribe(wavURL: url)
+            fputs("[muesli-native] Nemotron 3.5 result: \(result.text.prefix(80)) (took \(String(format: "%.3f", result.processingTime))s)\n", stderr)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return SpeechTranscriptionResult(
+                text: text,
+                segments: text.isEmpty ? [] : [SpeechSegment(start: 0, end: 0, text: text)]
+            )
+        } else {
+            throw NSError(domain: "Muesli", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Nemotron 3.5 requires macOS 15 or later.",
             ])
         }
     }

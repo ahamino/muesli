@@ -78,7 +78,7 @@ final class StreamingDictationController {
     private var activeSessionID: UUID?
     private var stoppingSessionID: UUID?
     private var streamStateTask: Task<Void, Never>?
-    private let chunkSamples = 8960  // 560ms at 16kHz
+    private let chunkSamples: Int  // 8960 (560ms) for EN nemotron, 35840 (2240ms) for nemotron35
     private let stopStreamStateTimeout: TimeInterval
     private static let stopDrainTimeout: TimeInterval = 1.0
 
@@ -86,11 +86,13 @@ final class StreamingDictationController {
         transcriber: NemotronStreamingTranscriber,
         preferredInputDeviceID: AudioObjectID? = nil,
         recorder: StreamingDictationRecording = StreamingMicRecorder(),
-        stopStreamStateTimeout: TimeInterval = 1.0
+        stopStreamStateTimeout: TimeInterval = 1.0,
+        chunkSamples: Int = 8960
     ) {
         self.transcriber = NemotronStreamingTranscriberAdapter(transcriber)
         self.recorder = recorder
         self.stopStreamStateTimeout = stopStreamStateTimeout
+        self.chunkSamples = chunkSamples
         recorder.preferredInputDeviceID = preferredInputDeviceID
     }
 
@@ -98,11 +100,13 @@ final class StreamingDictationController {
         transcriber: NemotronStreamingTranscribing,
         preferredInputDeviceID: AudioObjectID? = nil,
         recorder: StreamingDictationRecording = StreamingMicRecorder(),
-        stopStreamStateTimeout: TimeInterval = 1.0
+        stopStreamStateTimeout: TimeInterval = 1.0,
+        chunkSamples: Int = 8960
     ) {
         self.transcriber = transcriber
         self.recorder = recorder
         self.stopStreamStateTimeout = stopStreamStateTimeout
+        self.chunkSamples = chunkSamples
         recorder.preferredInputDeviceID = preferredInputDeviceID
     }
 

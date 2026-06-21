@@ -4962,6 +4962,12 @@ final class MuesliController: NSObject {
         indicator.showWarning(floatingMessage, icon: icon, duration: 3.0)
     }
 
+    /// Streaming RNNT dictation backends (handsfree-only, live text at cursor).
+    /// Both Nemotron variants share the same hold-to-talk / arm / warmup gating.
+    private var isStreamingDictationBackend: Bool {
+        selectedBackend.backend == "nemotron" || selectedBackend.backend == "nemotron35"
+    }
+
     private func handlePrepare() {
         if isMeetingRecording() { return }
         if blockDictationForMeetingActivityIfNeeded() { return }
@@ -4970,7 +4976,7 @@ final class MuesliController: NSObject {
             beginDictationLatencyTrace(reason: "prepare")
         }
         markDictationLatency("prepare_requested")
-        guard selectedBackend.backend != "nemotron" else {
+        guard !isStreamingDictationBackend else {
             return
         }
         if !dictationAudioSessionManager.hasActiveSession {
@@ -4987,7 +4993,7 @@ final class MuesliController: NSObject {
         if dictationLatencyTraceID == nil {
             beginDictationLatencyTrace(reason: "hotkey")
         }
-        if selectedBackend.backend != "nemotron" {
+        if !isStreamingDictationBackend {
             setState(.preparing)
             meetingMonitor.suppressWhileActive()
             meetingMonitor.refreshState()
@@ -5031,7 +5037,7 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.refreshRoute(
             intent: intent,
             delay: delay,
-            canWarmUp: canPrimeDictationRecorder && selectedBackend.backend != "nemotron"
+            canWarmUp: canPrimeDictationRecorder && !isStreamingDictationBackend
         )
     }
 
@@ -5232,7 +5238,7 @@ final class MuesliController: NSObject {
         if blockDictationForMeetingActivityIfNeeded() { return }
 
         // Nemotron is handsfree-only — block hold-to-talk and show a hint
-        if selectedBackend.backend == "nemotron" {
+        if isStreamingDictationBackend {
             dictationAudioSessionManager.cancel(reason: "nemotron-hold-blocked")
             fputs("[muesli-native] hold-to-talk blocked for Nemotron, showing warning\n", stderr)
             indicator.showWarning("Double-tap for Nemotron handsfree mode", icon: "⚡")
@@ -5260,9 +5266,31 @@ final class MuesliController: NSObject {
     private func startNemotronStreamingAsync(
         sessionID: UUID
     ) {
+        let useNemotron35 = selectedBackend.backend == "nemotron35"
         Task {
-            let transcriber = await transcriptionCoordinator.getNemotronTranscriber()
-            fputs("[muesli-native] got Nemotron transcriber\n", stderr)
+            // Resolve the streaming transcriber + chunk size for the selected backend.
+            let makeController: @MainActor (AudioObjectID?) -> StreamingDictationController
+            if useNemotron35 {
+                let transcriber = await transcriptionCoordinator.getNemotron35Transcriber()
+                fputs("[muesli-native] got Nemotron 3.5 transcriber\n", stderr)
+                let chunkSamples = transcriber.chunkSamples
+                makeController = { preferredID in
+                    StreamingDictationController(
+                        transcriber: transcriber,
+                        preferredInputDeviceID: preferredID,
+                        chunkSamples: chunkSamples
+                    )
+                }
+            } else {
+                let transcriber = await transcriptionCoordinator.getNemotronTranscriber()
+                fputs("[muesli-native] got Nemotron transcriber\n", stderr)
+                makeController = { preferredID in
+                    StreamingDictationController(
+                        transcriber: transcriber,
+                        preferredInputDeviceID: preferredID
+                    )
+                }
+            }
 
             await MainActor.run {
                 guard self.isNemotronStreaming, self.nemotronStreamingSessionID == sessionID else {
@@ -5271,10 +5299,7 @@ final class MuesliController: NSObject {
                 }
                 let currentPreferredInputDeviceID =
                     self.dictationAudioRoutingController.cachedPreferredInputDeviceIDForDictation()
-                let controller = StreamingDictationController(
-                    transcriber: transcriber,
-                    preferredInputDeviceID: currentPreferredInputDeviceID
-                )
+                let controller = makeController(currentPreferredInputDeviceID)
                 controller.onPartialText = { [weak self] fullText in
                     guard let self else { return }
                     DispatchQueue.main.async {
@@ -5383,7 +5408,7 @@ final class MuesliController: NSObject {
         setState(.preparing)
 
         // Nemotron streaming: live text at cursor in handsfree mode too
-        if selectedBackend.backend == "nemotron" {
+        if isStreamingDictationBackend {
             if #available(macOS 15, *) {
                 let sessionID = UUID()
                 isNemotronStreaming = true

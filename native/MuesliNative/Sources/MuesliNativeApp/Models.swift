@@ -73,6 +73,15 @@ struct BackendOption: Equatable {
         recommended: false
     )
 
+    static let nemotron35Multilingual = BackendOption(
+        backend: "nemotron35",
+        model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+        label: "Nemotron 3.5 Multilingual (Experimental)",
+        sizeLabel: "~665 MB",
+        description: "Experimental. NVIDIA Nemotron 3.5 streaming RNNT. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Handsfree mode only. Append-only — no corrections.",
+        recommended: false
+    )
+
     static let canaryQwen = BackendOption(
         backend: "canary",
         model: "phequals/canary-qwen-2.5b-coreml-int8",
@@ -112,7 +121,7 @@ struct BackendOption: Equatable {
     )
 
     static let experimental: [BackendOption] = [
-        .qwen3Asr, .canaryQwen, .nemotronStreaming,
+        .qwen3Asr, .canaryQwen, .nemotronStreaming, .nemotron35Multilingual,
     ]
 
     /// Models available for download and use.
@@ -173,6 +182,10 @@ struct BackendOption: Equatable {
         case "nemotron":
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cache/muesli/models/nemotron-560ms/encoder/encoder_int8.mlmodelc")
+            return fm.fileExists(atPath: path.path)
+        case "nemotron35":
+            let path = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
             return fm.fileExists(atPath: path.path)
         case "canary":
             return CanaryQwenModelStore.isAvailableLocally()

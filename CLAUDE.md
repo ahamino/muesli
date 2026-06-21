@@ -12,7 +12,7 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Meeting transcription:** Captures mic (You) + system audio (Others) → VAD-driven chunking → speaker diarization → AI-powered meeting notes
 - **Meeting export:** Export notes or transcript as PDF (paginated US Letter) or Markdown via `MeetingExporter.swift`
 - **Screen context:** Accessibility API captures app name + text around cursor for dictation context-awareness (opt-in, off by default)
-- **7 ASR models:** Parakeet v3/v2, Whisper Small/Medium/Large Turbo, Qwen3 ASR, Nemotron Streaming
+- **8 ASR models:** Parakeet v3/v2, Whisper Small/Medium/Large Turbo, Qwen3 ASR, Nemotron Streaming (EN), Nemotron 3.5 Multilingual
 - **3 summarization backends:** OpenAI API key, OpenRouter API key, ChatGPT OAuth (subscription-based)
 - **Camera-based meeting detection:** Requires mic + camera + recognized meeting app (camera alone won't trigger)
 - **Join & Record:** Extract meeting URLs from calendar events (Zoom, Meet, Teams, Webex, Chime, FaceTime), split button with "Join & Record" / "Join Only" / "Record Only", platform icons in notifications
@@ -228,6 +228,7 @@ Event-driven architecture for meeting notifications:
 ## Known Limitations
 
 - **Nemotron Streaming:** English-only, best for 10s+ utterances (handsfree mode). Short dictations produce poor results.
+- **Nemotron 3.5 Multilingual (`nemotron35`):** Experimental. Ships the FluidInference `multilingual/2240ms` variant (~665 MB, vocab 13087, blank 13087). Multilingual incl. Hindi/Chinese/Japanese + 100+ locales via `prompt_id` (fixed to auto-detect = 101 in v1; no language picker yet). Native punctuation (in-vocab). Same RNNT limits as the EN backend: handsfree-only, append-only/no corrections, weak on very short dictations. 2240ms chunk latency (35840 samples). Cache shape `[1,24,42,1024]`. Reuses `NemotronStreamingTranscriber.StreamState` and the `NemotronStreamingTranscribing` protocol; `StreamingDictationController` takes a `chunkSamples` override. Larger vocab → heavier per-frame argmax than the EN 1024 path. Model cached at `~/.cache/muesli/models/nemotron35-multilingual-2240ms/`. Follow-ups: in-app language picker (Hindi etc.), optional latin-track/other latency tiers.
 - **Qwen3 ASR:** 2-3s latency (autoregressive decoder). First run after launch has ~30s CoreML compilation warmup.
 - **ChatGPT OAuth:** Uses reverse-engineered WHAM API. Could break if OpenAI changes the API.
 - **Speaker diarization:** Post-processing only. Runs after meeting stops.
