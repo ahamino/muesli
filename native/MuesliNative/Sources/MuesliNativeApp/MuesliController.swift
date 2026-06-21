@@ -1127,7 +1127,11 @@ final class MuesliController: NSObject {
         let generation = iCloudSyncGeneration
         iCloudSyncTask = Task { [weak self] in
             do {
-                let result = try await MuesliICloudSyncEngine().sync(store: store)
+                let forceBridgeDeviceRefresh = userInitiated || self?.bridgeActivationPending == true
+                let result = try await MuesliICloudSyncEngine().sync(
+                    store: store,
+                    forceBridgeDeviceRefresh: forceBridgeDeviceRefresh
+                )
                 do {
                     _ = try store.purgeSoftDeletedTextRecords()
                 } catch {

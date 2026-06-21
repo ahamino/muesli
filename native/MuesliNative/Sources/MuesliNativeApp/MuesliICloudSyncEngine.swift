@@ -134,7 +134,14 @@ enum MuesliBridgeDeviceIdentity {
         UserDefaults.standard.string(forKey: remoteDevicePlatformKey)
     }
 
-    static func shouldRefresh(defaults: UserDefaults = .standard, now: Date = Date()) -> Bool {
+    static func shouldRefresh(
+        defaults: UserDefaults = .standard,
+        now: Date = Date(),
+        forceRefresh: Bool = false
+    ) -> Bool {
+        if forceRefresh {
+            return true
+        }
         guard let lastRefresh = defaults.object(forKey: lastRefreshKey) as? Date else {
             return true
         }
@@ -256,10 +263,13 @@ final class MuesliICloudSyncEngine {
         self.defaults = defaults
     }
 
-    func sync(store: DictationStore) async throws -> ICloudSyncResult {
+    func sync(
+        store: DictationStore,
+        forceBridgeDeviceRefresh: Bool = false
+    ) async throws -> ICloudSyncResult {
         try await verifyAccountAvailable()
         let syncZoneWasRecreated = try await ensureSyncZone()
-        await refreshBridgeDeviceLink()
+        await refreshBridgeDeviceLink(forceRefresh: forceBridgeDeviceRefresh)
         try await migrateDefaultZoneIfNeeded(store: store)
 
         let remoteChanges = try await fetchChangedTextRecords()
@@ -346,8 +356,11 @@ final class MuesliICloudSyncEngine {
         }
     }
 
-    private func refreshBridgeDeviceLink() async {
-        guard MuesliBridgeDeviceIdentity.shouldRefresh(defaults: defaults) else { return }
+    private func refreshBridgeDeviceLink(forceRefresh: Bool = false) async {
+        guard MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            forceRefresh: forceRefresh
+        ) else { return }
         do {
             try await upsertLocalBridgeDeviceRecord()
             let records = try await fetchBridgeDeviceRecords()
@@ -355,6 +368,7 @@ final class MuesliICloudSyncEngine {
             MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         } catch {
             fputs("Failed to refresh iCloud bridge device identity: \(error)\n", stderr)
+            MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults)
         }
     }
 

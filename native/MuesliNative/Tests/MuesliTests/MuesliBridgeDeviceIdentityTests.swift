@@ -75,6 +75,21 @@ struct MuesliBridgeDeviceIdentityTests {
         ))
     }
 
+    @Test("shouldRefresh can force refresh before the throttle expires")
+    func shouldRefreshCanForceRefreshBeforeThrottleExpires() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let now = Date(timeIntervalSince1970: 1_770_000_000)
+
+        MuesliBridgeDeviceIdentity.markRefreshed(defaults: defaults, at: now)
+
+        #expect(MuesliBridgeDeviceIdentity.shouldRefresh(
+            defaults: defaults,
+            now: now.addingTimeInterval(1),
+            forceRefresh: true
+        ))
+    }
+
     @Test("shouldRefresh returns false within one hour and true after one hour once linked")
     func shouldRefreshUsesOneHourIntervalOnceLinked() throws {
         let (defaults, suiteName) = try makeDefaults()
