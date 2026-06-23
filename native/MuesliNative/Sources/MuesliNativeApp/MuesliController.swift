@@ -1923,7 +1923,7 @@ final class MuesliController: NSObject {
         updateConfig { $0.customWords.append(word) }
     }
 
-    func addDictionarySuggestion(_ suggestion: DictionarySuggestion, presentPrompt: Bool = false) {
+    func addDictionarySuggestion(_ suggestion: DictionarySuggestion) {
         guard config.enableDictionaryCorrectionPrompts else {
             logDictionarySuggestion("skip reason=disabled \(dictionarySuggestionLogMetadata(suggestion))")
             return
@@ -1979,10 +1979,8 @@ final class MuesliController: NSObject {
             }
         }
 
-        logDictionarySuggestion("persist action=\(persistenceAction) presentPrompt=\(presentPrompt) \(metadata)")
-        if presentPrompt {
-            enqueueDictionarySuggestionPrompt(promptSuggestion)
-        }
+        logDictionarySuggestion("persist action=\(persistenceAction) \(metadata)")
+        enqueueDictionarySuggestionPrompt(promptSuggestion)
     }
 
     func acceptDictionarySuggestion(id: UUID) {
@@ -2096,10 +2094,6 @@ final class MuesliController: NSObject {
             presentDictionarySuggestionPrompt(suggestion)
             return
         }
-    }
-
-    private func presentNextDictionarySuggestionPromptIfPossibleBeforeQueueHandoff() {
-        presentNextDictionarySuggestionPromptIfPossible()
     }
 
     private func dictionarySuggestionLogMetadata(_ suggestion: DictionarySuggestion) -> String {
@@ -6346,8 +6340,8 @@ final class MuesliController: NSObject {
                                 originalText: text,
                                 appContext: storageContext,
                                 targetApp: correctionTargetApp
-                            ) { [weak self] suggestion, shouldPresentPrompt in
-                                self?.addDictionarySuggestion(suggestion, presentPrompt: shouldPresentPrompt)
+                            ) { [weak self] suggestion in
+                                self?.addDictionarySuggestion(suggestion)
                             }
                         }
                     }

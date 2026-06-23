@@ -267,53 +267,107 @@ struct DictionaryCorrectionDetector {
         maxCandidates: Int
     ) -> [CorrectionCandidate] {
         guard maxCandidates > 0 else { return [] }
-        guard run.observedTokens.count <= run.replacementTokens.count * maxObservedTokensPerDictionaryWord else {
-            return []
-        }
         var results: [CorrectionCandidate] = []
         var observedIndex = 0
 
         for replacementToken in run.replacementTokens {
             guard results.count < maxCandidates, observedIndex < run.observedTokens.count else { break }
 
-            var bestCandidate: CorrectionCandidate?
-            var bestObservedLength = 0
-            var bestSimilarity = 0.0
-            let maxObservedLength = min(maxObservedTokensPerDictionaryWord, run.observedTokens.count - observedIndex)
-
-            for observedLength in 1...maxObservedLength {
-                let observedText = run.observedTokens[observedIndex..<(observedIndex + observedLength)]
-                    .map(\.text)
-                    .joined(separator: " ")
-                guard let observedCandidate = normalizedCandidate(observedText),
-                      let replacementCandidate = normalizedCandidate(replacementToken.text),
-                      isWordScopedSuggestion(observed: observedCandidate, replacement: replacementCandidate),
-                      originalText.range(of: observedCandidate, options: [.caseInsensitive, .diacriticInsensitive]) != nil,
-                      isLikelyDictionaryCorrection(observed: observedCandidate, replacement: replacementCandidate)
-                else { continue }
-
-                let similarity = CustomWordMatcher.jaroWinklerSimilarity(
-                    observedCandidate.replacingOccurrences(of: " ", with: "").lowercased(),
-                    replacementCandidate.lowercased()
-                )
-                if similarity > bestSimilarity {
-                    bestCandidate = CorrectionCandidate(
-                        observed: observedCandidate,
-                        replacement: replacementCandidate
-                    )
-                    bestObservedLength = observedLength
-                    bestSimilarity = similarity
-                }
-            }
-
-            if let bestCandidate {
+            if let overlongLength = overlongCorrectionLength(
+                observedTokens: run.observedTokens,
+                observedIndex: observedIndex,
+                replacementToken: replacementToken,
+                originalText: originalText
+            ) {
+                observedIndex += overlongLength
+            } else if let (bestCandidate, observedLength) = bestTokenCandidate(
+                observedTokens: run.observedTokens,
+                observedIndex: observedIndex,
+                replacementToken: replacementToken,
+                originalText: originalText
+            ) {
                 results.append(bestCandidate)
-                observedIndex += bestObservedLength
-            } else {
-                observedIndex += 1
+                observedIndex += observedLength
             }
         }
         return results
+    }
+
+    private static func bestTokenCandidate(
+        observedTokens: [WordToken],
+        observedIndex: Int,
+        replacementToken: WordToken,
+        originalText: String
+    ) -> (CorrectionCandidate, Int)? {
+        var bestCandidate: CorrectionCandidate?
+        var bestObservedLength = 0
+        var bestSimilarity = 0.0
+        let maxObservedLength = min(maxObservedTokensPerDictionaryWord, observedTokens.count - observedIndex)
+
+        for observedLength in 1...maxObservedLength {
+            let observedText = observedTokens[observedIndex..<(observedIndex + observedLength)]
+                .map(\.text)
+                .joined(separator: " ")
+            guard let observedCandidate = normalizedCandidate(observedText),
+                  let replacementCandidate = normalizedCandidate(replacementToken.text),
+                  isWordScopedSuggestion(observed: observedCandidate, replacement: replacementCandidate),
+                  originalText.range(of: observedCandidate, options: [.caseInsensitive, .diacriticInsensitive]) != nil,
+                  isLikelyDictionaryCorrection(observed: observedCandidate, replacement: replacementCandidate)
+            else { continue }
+
+            let similarity = CustomWordMatcher.jaroWinklerSimilarity(
+                observedCandidate.replacingOccurrences(of: " ", with: "").lowercased(),
+                replacementCandidate.lowercased()
+            )
+            if similarity > bestSimilarity {
+                bestCandidate = CorrectionCandidate(
+                    observed: observedCandidate,
+                    replacement: replacementCandidate
+                )
+                bestObservedLength = observedLength
+                bestSimilarity = similarity
+            }
+        }
+
+        guard let bestCandidate else { return nil }
+        return (bestCandidate, bestObservedLength)
+    }
+
+    private static func overlongCorrectionLength(
+        observedTokens: [WordToken],
+        observedIndex: Int,
+        replacementToken: WordToken,
+        originalText: String
+    ) -> Int? {
+        let maxOverlongLength = min(3, observedTokens.count - observedIndex)
+        guard maxOverlongLength > maxObservedTokensPerDictionaryWord else { return nil }
+        for observedLength in stride(from: maxOverlongLength, through: maxObservedTokensPerDictionaryWord + 1, by: -1) {
+            let observedText = observedTokens[observedIndex..<(observedIndex + observedLength)]
+                .map(\.text)
+                .joined(separator: " ")
+            guard let observedCandidate = normalizedCandidate(observedText),
+                  let replacementCandidate = normalizedCandidate(replacementToken.text),
+                  originalText.range(of: observedCandidate, options: [.caseInsensitive, .diacriticInsensitive]) != nil,
+                  isLikelyOverlongSplitCorrection(observed: observedCandidate, replacement: replacementCandidate)
+            else { continue }
+            return observedLength
+        }
+        return nil
+    }
+
+    private static func isLikelyOverlongSplitCorrection(observed: String, replacement: String) -> Bool {
+        let observedTokens = observed.split(whereSeparator: \.isWhitespace)
+        guard observedTokens.count > maxObservedTokensPerDictionaryWord,
+              !replacement.contains("-"),
+              !replacement.contains("_"),
+              !replacement.contains("/"),
+              !isAcronymLike(replacement),
+              !commonWords.contains(replacement.lowercased())
+        else { return false }
+
+        let compactObserved = observedTokens.joined().lowercased()
+        let compactReplacement = replacement.lowercased()
+        return CustomWordMatcher.jaroWinklerSimilarity(compactObserved, compactReplacement) >= minimumCorrectionSimilarity
     }
 
     static func hasSufficientSharedContext(originalText: String, editedText: String) -> Bool {
@@ -660,7 +714,7 @@ struct DictionaryCorrectionDetector {
     private static func isRecognizedEnglishWord(_ value: String) -> Bool {
         spellCheckerLock.lock()
         defer { spellCheckerLock.unlock() }
-        let range = NSSpellChecker.shared.checkSpelling(
+        let range = NSSpellChecker().checkSpelling(
             of: value,
             startingAt: 0,
             language: "en",
@@ -741,7 +795,7 @@ final class DictationCorrectionMonitor {
         originalText: String,
         appContext: String,
         targetApp: DictationCorrectionTargetApp?,
-        onSuggestion: @escaping @MainActor (DictionarySuggestion, Bool) -> Void
+        onSuggestion: @escaping @MainActor (DictionarySuggestion) -> Void
     ) {
         cancel()
         Self.log("start originalCharacters=\(originalText.count) target=\(targetApp?.appContext ?? appContext)")
@@ -803,12 +857,11 @@ final class DictationCorrectionMonitor {
                         Self.log("stableSnapshot rejected suggestions=0")
                     }
                     for suggestion in suggestions where !emittedSuggestionKeys.contains(suggestion.key) {
-                        let shouldPresentPrompt = true
                         emittedSuggestionKeys.insert(suggestion.key)
                         emittedSuggestionCount += 1
-                        Self.log("emit presentPrompt=\(shouldPresentPrompt) \(Self.suggestionLogMetadata(suggestion))")
+                        Self.log("emit \(Self.suggestionLogMetadata(suggestion))")
                         await MainActor.run {
-                            onSuggestion(suggestion, shouldPresentPrompt)
+                            onSuggestion(suggestion)
                         }
                         if emittedSuggestionCount >= Self.maxSuggestionsPerSession {
                             Self.log("complete reason=maxSuggestions count=\(emittedSuggestionCount)")

@@ -221,6 +221,18 @@ struct DictionaryCorrectionDetectorTests {
         #expect(suggestion?.appContext == "Codex|com.openai.chat")
     }
 
+    @Test("detects a word correction next to an inserted word")
+    func detectsCorrectionNextToInsertedWord() {
+        let suggestions = DictionaryCorrectionDetector.suggestions(
+            originalText: "I like museli today",
+            editedText: "I like fresh muesli today",
+            maxSuggestions: 3
+        )
+
+        #expect(suggestions.map(\.observed) == ["museli"])
+        #expect(suggestions.map(\.replacement) == ["muesli"])
+    }
+
     @Test("requires shared dictation context before diffing AX snapshots")
     func requiresSharedDictationContext() {
         #expect(DictionaryCorrectionDetector.hasSufficientSharedContext(
