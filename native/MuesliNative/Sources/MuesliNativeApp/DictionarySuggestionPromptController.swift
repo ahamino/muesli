@@ -34,8 +34,8 @@ final class DictionarySuggestionPromptController: NSObject {
     ) {
         dismiss(notify: false)
 
-        let cardWidth: CGFloat = 420
-        let cardHeight: CGFloat = 126
+        let cardWidth: CGFloat = 356
+        let cardHeight: CGFloat = 96
         let closeButtonSize: CGFloat = 22
         let cardX = closeButtonSize / 2 + 1
         let topGutter: CGFloat = closeButtonSize / 2 + 1
@@ -64,6 +64,9 @@ final class DictionarySuggestionPromptController: NSObject {
             frame: NSRect(origin: .zero, size: size),
             cardFrame: NSRect(x: cardX, y: 0, width: cardWidth, height: cardHeight),
             suggestion: suggestion,
+            onProgressLayerReady: { [weak self] layer in
+                self?.progressLayer = layer
+            },
             onAdd: { [weak self] in
                 self?.dismiss(notify: false)
                 onAdd()
@@ -95,13 +98,6 @@ final class DictionarySuggestionPromptController: NSObject {
         dismissButton.toolTip = "Dismiss"
         contentView.addSubview(dismissButton)
 
-        let progressBar = CALayer()
-        progressBar.frame = CGRect(x: 0, y: 0, width: cardWidth, height: 3)
-        progressBar.backgroundColor = NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.8).cgColor
-        progressBar.anchorPoint = CGPoint(x: 0, y: 0.5)
-        progressBar.position = CGPoint(x: cardX, y: 1.5)
-        contentView.layer?.addSublayer(progressBar)
-        progressLayer = progressBar
         panel.contentView = contentView
 
         self.panel = panel
@@ -287,6 +283,7 @@ private final class DictionarySuggestionHoverView: NSView {
 private final class DictionarySuggestionPromptView: NSView {
     private let cardFrame: NSRect
     private let suggestion: DictionarySuggestion
+    private let onProgressLayerReady: (CALayer) -> Void
     private let onAdd: () -> Void
     private let onIgnore: () -> Void
 
@@ -294,11 +291,13 @@ private final class DictionarySuggestionPromptView: NSView {
         frame: NSRect,
         cardFrame: NSRect,
         suggestion: DictionarySuggestion,
+        onProgressLayerReady: @escaping (CALayer) -> Void,
         onAdd: @escaping () -> Void,
         onIgnore: @escaping () -> Void
     ) {
         self.cardFrame = cardFrame
         self.suggestion = suggestion
+        self.onProgressLayerReady = onProgressLayerReady
         self.onAdd = onAdd
         self.onIgnore = onIgnore
         super.init(frame: frame)
@@ -320,27 +319,40 @@ private final class DictionarySuggestionPromptView: NSView {
         cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         addSubview(cardView)
 
-        let iconSize: CGFloat = 28
+        let countdownTrack = CALayer()
+        countdownTrack.frame = CGRect(x: 0, y: 0, width: cardFrame.width, height: 5)
+        countdownTrack.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        cardView.layer?.addSublayer(countdownTrack)
+
+        let progressBar = CALayer()
+        progressBar.frame = countdownTrack.bounds
+        progressBar.backgroundColor = NSColor(red: 0.24, green: 0.56, blue: 1.0, alpha: 1.0).cgColor
+        progressBar.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressBar.position = CGPoint(x: 0, y: countdownTrack.bounds.midY)
+        countdownTrack.addSublayer(progressBar)
+        onProgressLayerReady(progressBar)
+
+        let iconSize: CGFloat = 24
         let iconView = NSImageView()
         iconView.image = NSImage(systemSymbolName: "text.book.closed", accessibilityDescription: "Dictionary")
             ?? NSImage(systemSymbolName: "text.quote", accessibilityDescription: "Dictionary")
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         iconView.contentTintColor = NSColor.white.withAlphaComponent(0.86)
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.frame = NSRect(x: 16, y: cardFrame.height - 46, width: iconSize, height: iconSize)
+        iconView.frame = NSRect(x: 14, y: cardFrame.height - 42, width: iconSize, height: iconSize)
         cardView.addSubview(iconView)
 
-        let textX: CGFloat = 56
-        let buttonWidth: CGFloat = 82
+        let textX: CGFloat = 50
+        let buttonWidth: CGFloat = 76
         let buttonGap: CGFloat = 8
-        let buttonY: CGFloat = 18
-        let buttonHeight: CGFloat = 30
-        let ignoreX = cardFrame.width - 16 - buttonWidth
+        let buttonY: CGFloat = 13
+        let buttonHeight: CGFloat = 28
+        let ignoreX = cardFrame.width - 14 - buttonWidth
         let addX = ignoreX - buttonGap - buttonWidth
-        let textWidth = cardFrame.width - textX - 18
+        let textWidth = cardFrame.width - textX - 14
 
         let title = label("Add correction?", font: .systemFont(ofSize: 13, weight: .semibold), color: .white)
-        title.frame = NSRect(x: textX, y: 92, width: textWidth, height: 18)
+        title.frame = NSRect(x: textX, y: 66, width: textWidth, height: 18)
         cardView.addSubview(title)
 
         let detail = label(
@@ -350,7 +362,7 @@ private final class DictionarySuggestionPromptView: NSView {
             lineBreakMode: .byTruncatingMiddle
         )
         detail.toolTip = "\"\(suggestion.observed)\" -> \"\(suggestion.replacement)\""
-        detail.frame = NSRect(x: textX, y: 66, width: textWidth, height: 18)
+        detail.frame = NSRect(x: textX, y: 43, width: textWidth, height: 18)
         cardView.addSubview(detail)
 
         let add = button(title: "Add", action: #selector(addTapped), isPrimary: true)
