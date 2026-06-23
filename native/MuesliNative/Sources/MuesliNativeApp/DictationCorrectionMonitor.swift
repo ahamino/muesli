@@ -25,6 +25,7 @@ struct DictionaryCorrectionDetector {
     private static let maxObservedTokensPerDictionaryWord = 2
     private static let maxAlignmentTokens = 512
     private static let maxAlignmentCellCount = 300_000
+    private static let logger = Logger(subsystem: "com.muesli.native", category: "DictionaryCorrection")
 
     private struct EnglishWordLookup: Sendable {
         private let recognizedWords: Set<String>
@@ -260,12 +261,17 @@ struct DictionaryCorrectionDetector {
     }
 
     private static func isAlignmentInputWithinBounds(originalCount: Int, editedCount: Int) -> Bool {
-        guard originalCount > 0,
-              editedCount > 0,
-              originalCount <= maxAlignmentTokens,
-              editedCount <= maxAlignmentTokens
-        else { return false }
-        return (originalCount + 1) * (editedCount + 1) <= maxAlignmentCellCount
+        let cellCount = (originalCount + 1) * (editedCount + 1)
+        guard originalCount > 0, editedCount > 0 else { return false }
+        guard originalCount <= maxAlignmentTokens, editedCount <= maxAlignmentTokens else {
+            logger.debug("alignmentSkipped reason=tokenLimit originalTokens=\(originalCount, privacy: .public) editedTokens=\(editedCount, privacy: .public) maxTokens=\(maxAlignmentTokens, privacy: .public)")
+            return false
+        }
+        guard cellCount <= maxAlignmentCellCount else {
+            logger.debug("alignmentSkipped reason=cellLimit originalTokens=\(originalCount, privacy: .public) editedTokens=\(editedCount, privacy: .public) cells=\(cellCount, privacy: .public) maxCells=\(maxAlignmentCellCount, privacy: .public)")
+            return false
+        }
+        return true
     }
 
     private struct TokenChangeRun {

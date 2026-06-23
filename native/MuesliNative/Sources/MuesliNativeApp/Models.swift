@@ -585,7 +585,7 @@ struct DictionarySuggestion: Codable, Equatable, Identifiable, Sendable {
     }
 
     var customWord: CustomWord {
-        CustomWord(word: observed, replacement: replacement, matchingThreshold: 0.92)
+        CustomWord(word: observed, replacement: replacement)
     }
 
     var appDisplayName: String {

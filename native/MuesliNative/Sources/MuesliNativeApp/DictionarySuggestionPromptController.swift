@@ -21,6 +21,10 @@ final class DictionarySuggestionPromptController: NSObject {
         !isPausedWhenTimerFires
     }
 
+    static func shouldCompleteAutoDismissAfterFade(isPausedAtCompletion: Bool) -> Bool {
+        !isPausedAtCompletion
+    }
+
     var isShowing: Bool {
         panel != nil
     }
@@ -164,7 +168,12 @@ final class DictionarySuggestionPromptController: NSObject {
     private func autoDismissNow() {
         guard Self.shouldAutoDismissFromTimer(isPausedWhenTimerFires: isDismissPaused) else { return }
         animateOut { [weak self] in
-            self?.dismiss(notify: true)
+            guard let self else { return }
+            guard Self.shouldCompleteAutoDismissAfterFade(isPausedAtCompletion: self.isDismissPaused) else {
+                self.restoreAfterPausedAutoDismissFade()
+                return
+            }
+            self.dismiss(notify: true)
         }
     }
 
@@ -213,6 +222,11 @@ final class DictionarySuggestionPromptController: NSObject {
                 completion()
             }
         })
+    }
+
+    private func restoreAfterPausedAutoDismissFade() {
+        guard let panel else { return }
+        panel.alphaValue = 1
     }
 
     private static func frame(for size: NSSize, anchorFrame: NSRect?) -> NSRect {

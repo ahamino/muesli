@@ -9,4 +9,11 @@ struct DictionarySuggestionPromptControllerTests {
         #expect(DictionarySuggestionPromptController.shouldAutoDismissFromTimer(isPausedWhenTimerFires: false))
         #expect(!DictionarySuggestionPromptController.shouldAutoDismissFromTimer(isPausedWhenTimerFires: true))
     }
+
+    @Test("Auto-dismiss completion re-checks pause state after fade")
+    @MainActor
+    func autoDismissCompletionRechecksPauseStateAfterFade() {
+        #expect(DictionarySuggestionPromptController.shouldCompleteAutoDismissAfterFade(isPausedAtCompletion: false))
+        #expect(!DictionarySuggestionPromptController.shouldCompleteAutoDismissAfterFade(isPausedAtCompletion: true))
+    }
 }
