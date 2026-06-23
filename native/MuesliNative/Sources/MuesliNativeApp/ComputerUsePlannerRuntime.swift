@@ -27,6 +27,7 @@ final class ComputerUsePlannerRuntime {
     typealias ObserveHandler = @MainActor (ComputerUseElementRegistry, Bool, ComputerUseObservationTarget?) -> ComputerUseObservation
     typealias PlanHandler = (ComputerUsePlannerRequest) async throws -> ComputerUsePlannerResponse
     typealias ExecuteHandler = @MainActor (ComputerUseToolCall, ComputerUseElementRegistry) async -> ComputerUseExecutionResult
+    typealias ScreenshotTextRecognizer = (ComputerUseScreenshotObservation?) async -> String?
 
     private let config: AppConfig
     private let maxSteps: Int?
@@ -36,6 +37,7 @@ final class ComputerUsePlannerRuntime {
     private let observe: ObserveHandler
     private let plan: PlanHandler
     private let execute: ExecuteHandler
+    private let recognizeScreenshotText: ScreenshotTextRecognizer
     private let maxPlannerRetries = 1
     private let maxUnchangedObservationLoops = 4
 
@@ -54,6 +56,9 @@ final class ComputerUsePlannerRuntime {
         plan: PlanHandler? = nil,
         execute: @escaping ExecuteHandler = { toolCall, registry in
             await ComputerUseToolExecutor.execute(toolCall, registry: registry)
+        },
+        recognizeScreenshotText: @escaping ScreenshotTextRecognizer = { screenshot in
+            await ComputerUseScreenshotTextRecognition.recognizedText(from: screenshot)
         }
     ) {
         self.config = config
@@ -65,6 +70,7 @@ final class ComputerUsePlannerRuntime {
             try await ComputerUsePlannerClient.planNextTool(request: request, config: config)
         }
         self.execute = execute
+        self.recognizeScreenshotText = recognizeScreenshotText
     }
 
     func run(command: String) async -> ComputerUsePlannerRuntimeResult {
@@ -89,6 +95,7 @@ final class ComputerUsePlannerRuntime {
         var unchangedActionCounts: [String: Int] = [:]
         var unchangedObservationCounts: [String: Int] = [:]
         var invalidToolCallRepairCount = 0
+        var screenshotOCRTextByID: [String: String] = [:]
         let maxInvalidToolCallRepairs = 2
         // V1 keeps foreground activation, but state is scoped to a target app.
         // Later Codex-style work should replace this with background key-window tracking,
@@ -114,11 +121,15 @@ final class ComputerUsePlannerRuntime {
             }
             defer { step += 1 }
 
+            let latestWindowState = await windowState(
+                for: observation,
+                screenshotOCRTextByID: &screenshotOCRTextByID
+            )
             let request = ComputerUsePlannerRequest(
                 command: command,
                 step: step,
                 maxSteps: maxSteps,
-                latestWindowState: ComputerUseWindowState(observation: observation),
+                latestWindowState: latestWindowState,
                 priorOutcomes: priorResults
             )
 
@@ -173,7 +184,8 @@ final class ComputerUsePlannerRuntime {
                 title: "Model output",
                 body: response.rawModelOutput ?? formatToolCall(toolCall),
                 status: "planned",
-                step: step
+                step: step,
+                debugPayload: encodedDebugPayload(toolCall)
             ))
             if let validationFailure = toolCall.validationFailure() {
                 traceEvents.append(traceEvent(kind: "failed", title: "Schema rejected", body: validationFailure, status: "failed", step: step))
@@ -253,7 +265,8 @@ final class ComputerUsePlannerRuntime {
                     title: "Executing",
                     body: executionTraceBody(toolCall: toolCall, observation: observation),
                     status: "executing",
-                    step: step
+                    step: step,
+                    debugPayload: encodedDebugPayload(toolCall)
                 ))
                 let beforeObservation = observation
                 let result = await execute(toolCall, registry)
@@ -262,7 +275,8 @@ final class ComputerUsePlannerRuntime {
                     title: "Tool result",
                     body: result.message,
                     status: "\(result.status)",
-                    step: step
+                    step: step,
+                    debugPayload: encodedDebugPayload(TraceToolResultPayload(result))
                 ))
 
                 if Task.isCancelled || result.status == .cancelled {
@@ -363,6 +377,36 @@ final class ComputerUsePlannerRuntime {
         return .init(status: .cancelled, message: "CUA cancelled", traceEvents: events)
     }
 
+    private func windowState(
+        for observation: ComputerUseObservation,
+        screenshotOCRTextByID: inout [String: String]
+    ) async -> ComputerUseWindowState {
+        guard let screenshot = observation.screenshot else {
+            return ComputerUseWindowState(observation: observation)
+        }
+        if let cached = screenshotOCRTextByID[screenshot.screenshotID] {
+            return ComputerUseWindowState(observation: observation, screenshotOCRText: cached)
+        }
+        guard let recognized = await recognizeScreenshotText(screenshot) else {
+            return ComputerUseWindowState(observation: observation)
+        }
+        let bounded = Self.boundedScreenshotOCRText(recognized)
+        guard !bounded.isEmpty else {
+            return ComputerUseWindowState(observation: observation)
+        }
+        screenshotOCRTextByID[screenshot.screenshotID] = bounded
+        return ComputerUseWindowState(observation: observation, screenshotOCRText: bounded)
+    }
+
+    private static func boundedScreenshotOCRText(_ text: String) -> String {
+        let collapsed = text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        return String(collapsed.prefix(2_000))
+    }
+
     private func outcome(
         step: Int,
         toolCall: ComputerUseToolCall,
@@ -409,7 +453,8 @@ final class ComputerUsePlannerRuntime {
             title: "Observation",
             body: details.joined(separator: " - "),
             status: "observed",
-            step: step
+            step: step,
+            debugPayload: encodedDebugPayload(ComputerUseWindowState(observation: observation))
         )
     }
 
@@ -443,6 +488,30 @@ final class ComputerUsePlannerRuntime {
             )
         }
 
+        if isTextEntryTool(toolCall.tool), let text = toolCall.text {
+            if let source = requestedTextObservationSource(after, text: text) {
+                return ComputerUseStateDelta(
+                    status: .changed,
+                    summary: "Observed requested text in \(source) after \(toolCall.summary).",
+                    beforeStateID: before.stateID,
+                    afterStateID: after.stateID
+                )
+            }
+            let status: ComputerUseVerificationStatus = observationSignature(before) == observationSignature(after) ? .unchanged : .unknown
+            let summary: String
+            if status == .unchanged {
+                summary = "\(toolCall.summary) executed but AX did not expose the requested text and no AX state change was observed. Inspect the latest screenshot: finish if the text is visibly present, otherwise refocus the editable target or use a different insertion primitive."
+            } else {
+                summary = "\(toolCall.summary) changed UI state, but AX did not expose the requested text. Inspect the latest screenshot: finish if the text is visibly present, otherwise refocus or use another insertion primitive."
+            }
+            return ComputerUseStateDelta(
+                status: status,
+                summary: summary,
+                beforeStateID: before.stateID,
+                afterStateID: after.stateID
+            )
+        }
+
         let beforeSignature = observationSignature(before)
         let afterSignature = observationSignature(after)
         let status: ComputerUseVerificationStatus = beforeSignature == afterSignature ? .unchanged : .changed
@@ -450,7 +519,7 @@ final class ComputerUsePlannerRuntime {
         if status == .changed {
             summary = "Observed UI state changed after \(toolCall.summary)."
         } else if toolCall.tool == .typeText || toolCall.tool == .pasteText || toolCall.tool == .setValue {
-            summary = "\(toolCall.summary) executed but no focused value, selected text, or visible AX text change was observed; refocus the editable target or use a different insertion primitive."
+            summary = "\(toolCall.summary) executed but no focused value, selected text, or visible AX text change was observed. Inspect the latest screenshot and choose whether to finish, refocus, or retry."
         } else {
             summary = "\(toolCall.summary) executed but no relevant UI change was observed; choose a different strategy."
         }
@@ -460,6 +529,41 @@ final class ComputerUsePlannerRuntime {
             beforeStateID: before.stateID,
             afterStateID: after.stateID
         )
+    }
+
+    private func isTextEntryTool(_ tool: ComputerUseToolName) -> Bool {
+        tool == .typeText || tool == .pasteText
+    }
+
+    private func requestedTextObservationSource(_ observation: ComputerUseObservation, text: String) -> String? {
+        guard let sample = textVerificationSample(text) else { return nil }
+        if observationTextCorpus(observation).contains(sample) {
+            return "focused/visible AX text"
+        }
+        return nil
+    }
+
+    private func textVerificationSample(_ text: String) -> String? {
+        let tokens = ComputerUseElementCandidate.normalizedText(text)
+            .split(separator: " ")
+        guard !tokens.isEmpty else { return nil }
+        return tokens.prefix(16).joined(separator: " ")
+    }
+
+    private func observationTextCorpus(_ observation: ComputerUseObservation) -> String {
+        let focusedParts: [String] = if let focused = observation.focusedElement {
+            [focused.title, focused.label, focused.value]
+        } else {
+            []
+        }
+        let elementParts = observation.elements.flatMap { element in
+            [element.title, element.label, element.value, element.help]
+        }
+        return ComputerUseElementCandidate.normalizedText((
+            [observation.windowTitle, observation.selectedText ?? ""]
+                + focusedParts
+                + elementParts
+        ).joined(separator: " "))
     }
 
     private func verifiedOutcomeMessage(base: String, delta: ComputerUseStateDelta?) -> String {
@@ -557,7 +661,7 @@ final class ComputerUsePlannerRuntime {
 
     private func shouldTrackForRepetition(_ tool: ComputerUseToolName) -> Bool {
         switch tool {
-        case .moveCursor, .click, .clickElement, .clickPoint, .performSecondaryAction, .drag, .pressKey, .hotkey, .typeText, .pasteText, .setValue, .scroll, .navigateURL, .navigateActiveBrowserTab, .openNewBrowserTab, .activateBrowserTab:
+        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .drag, .pressKey, .hotkey, .typeText, .pasteText, .setValue, .scroll, .navigateURL, .navigateActiveBrowserTab, .openNewBrowserTab, .activateBrowserTab:
             return true
         case .listApps, .launchApp, .listWindows, .getAppState, .getWindowState, .listBrowserTabs, .pageGetText, .pageQueryDOM, .finish, .fail:
             return false
@@ -572,7 +676,7 @@ final class ComputerUsePlannerRuntime {
             return ComputerUseObservationTarget(appName: appName, bundleID: nil)
         }
         switch toolCall.tool {
-        case .moveCursor, .click, .clickElement, .clickPoint, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag:
+        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag:
             return fallback
         default:
             return nil
@@ -635,6 +739,10 @@ final class ComputerUsePlannerRuntime {
             return result.message.hasPrefix("Opened") ? result.message : "Opened app"
         case .click, .clickElement, .clickPoint:
             return result.message.hasPrefix("Clicked") ? result.message : "Clicked"
+        case .focusElement:
+            return result.message.hasPrefix("Focused") ? result.message : "Focused"
+        case .activateFocused:
+            return result.message.hasPrefix("Activated") ? result.message : "Activated focus"
         case .performSecondaryAction:
             return "Performed action"
         case .moveCursor:
@@ -669,6 +777,10 @@ final class ComputerUsePlannerRuntime {
             return "Opening \(target?.isEmpty == false ? target! : "app")"
         case .click, .clickElement, .clickPoint:
             return "Clicking"
+        case .focusElement:
+            return "Focusing"
+        case .activateFocused:
+            return "Activating focus"
         case .performSecondaryAction:
             return "Performing action"
         case .moveCursor:
@@ -714,7 +826,8 @@ final class ComputerUsePlannerRuntime {
                 title: "Planning",
                 body: "Step \(request.step)\(stepLimitSuffix(request.maxSteps)). Prior tool results: \(request.priorOutcomes.count).",
                 status: "planning",
-                step: request.step
+                step: request.step,
+                debugPayload: encodedDebugPayload(TracePlannerRequestPayload(request))
             ))
             do {
                 return try await plan(request)
@@ -764,10 +877,10 @@ final class ComputerUsePlannerRuntime {
         guard result.status == .failed || result.status == .unsupported else { return nil }
         let message = result.message.trimmingCharacters(in: .whitespacesAndNewlines)
         if browserToolCanFallBackToScreen(toolCall.tool), isBrowserAutomationPermissionFailure(message) {
-            return "\(message). Continue with get_app_state plus AX/screenshot tools: click_element/click_point, paste_text/type_text, press_key/hotkey, and scroll. Do not retry browser page tools unless the user grants Chrome Apple Events JavaScript permission."
+            return "\(message). Continue with get_window_state and visual screenshot actions. For browser pages, prefer click_point on visible targets, plus press_key/hotkey, type_text/paste_text, and scroll. Treat AX candidates as optional hints; avoid repeated focus_element/activate_focused cycles on generic web areas, action menus, or search results. Do not retry browser page tools unless the user grants Chrome Apple Events JavaScript permission."
         }
         if (toolCall.tool == .typeText || toolCall.tool == .pasteText), isTextFocusFailure(message) {
-            return "\(message). Continue with get_app_state and focus an editable target using click_element or set_value before retrying text entry. Prefer paste_text for Apple Notes and native rich-text editors. Do not repeat text entry until the focused target changes."
+            return "\(message). Continue with get_window_state/get_app_state, then retry text entry with process_id/window_id plus element_index or element_id for the editable field, web editor, note body, or document editing area. Prefer type_text for browser editors and paste_text for Apple Notes/native rich text. Do not repeat text entry until the target changes."
         }
         return nil
     }
@@ -811,8 +924,60 @@ final class ComputerUsePlannerRuntime {
         title: String,
         body: String,
         status: String?,
-        step: Int?
+        step: Int?,
+        debugPayload: String? = nil
     ) -> ComputerUseTraceEvent {
-        ComputerUseTraceEvent(kind: kind, title: title, body: body, status: status, step: step)
+        ComputerUseTraceEvent(kind: kind, title: title, body: body, status: status, step: step, debugPayload: debugPayload)
+    }
+
+    private func encodedDebugPayload<T: Encodable>(_ value: T, limit: Int = 60_000) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(value),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        guard text.count > limit else {
+            return text
+        }
+        return String(text.prefix(limit)) + "\n... truncated"
+    }
+}
+
+private struct TracePlannerRequestPayload: Codable {
+    let command: String
+    let step: Int
+    let maxSteps: Int?
+    let toolCatalogVersion: String
+    let latestWindowState: ComputerUseWindowState
+    let priorOutcomes: [ComputerUseToolOutcome]
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case step
+        case maxSteps = "max_steps"
+        case toolCatalogVersion = "tool_catalog_version"
+        case latestWindowState = "latest_window_state"
+        case priorOutcomes = "prior_tool_outcomes"
+    }
+
+    init(_ request: ComputerUsePlannerRequest) {
+        command = request.command
+        step = request.step
+        maxSteps = request.maxSteps
+        toolCatalogVersion = request.toolCatalogVersion
+        latestWindowState = request.latestWindowState
+        priorOutcomes = request.priorOutcomes
+    }
+}
+
+private struct TraceToolResultPayload: Codable {
+    let status: String
+    let message: String
+
+    init(_ result: ComputerUseExecutionResult) {
+        status = "\(result.status)"
+        message = result.message
     }
 }

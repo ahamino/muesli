@@ -203,12 +203,17 @@ final class MuesliController: NSObject {
     private let hotkeyMonitor = HotkeyMonitor()
     private let computerUseHotkeyMonitor = HotkeyMonitor()
     private let meetingRecordingHotkeyMonitor = HotkeyMonitor()
-    private let computerUseRecorder = MicrophoneRecorder()
+    private let computerUseRecorder = RouteAwareDictationRecorder()
     private let dictationRecorder = RouteAwareDictationRecorder()
     private let audioDuckingController: AudioDuckingManaging
     private let dictationAudioRoutingController: DictationAudioRouting
     private lazy var dictationAudioSessionManager = DictationAudioSessionManager(
         recorder: dictationRecorder,
+        duckingController: audioDuckingController,
+        routingController: dictationAudioRoutingController
+    )
+    private lazy var computerUseAudioSessionManager = DictationAudioSessionManager(
+        recorder: computerUseRecorder,
         duckingController: audioDuckingController,
         routingController: dictationAudioRoutingController
     )
@@ -270,11 +275,16 @@ final class MuesliController: NSObject {
     private var pendingReleaseSoundSessionID: UUID?
     private var pendingPreparingIndicatorWorkItem: DispatchWorkItem?
     private var computerUseCommandStartedAt: Date?
+    private var pendingComputerUseStopStartedAt: Date?
+    private var pendingComputerUseStopSessionID: UUID?
     private var computerUseCommandTask: Task<Void, Never>?
+    private var computerUseLatencyTraceID: UUID?
+    private var computerUseLatencyTraceStartedAt: Date?
     private var computerUseFloatingStatusWorkItem: DispatchWorkItem?
     private var computerUseLastFloatingStatusAt = Date.distantPast
     private var computerUseLastFloatingStatus = ""
     private var computerUseTranscriptVisible = false
+    private var computerUseTranscriptDwellUntil = Date.distantPast
     private let computerUseFloatingStatusMinimumDwell: TimeInterval = 0.85
     private var _streamingDictationController: Any?  // StreamingDictationController (macOS 15+)
     private var isNemotronStreaming = false
@@ -363,6 +373,11 @@ final class MuesliController: NSObject {
         dictationAudioSessionManager.onEvent = { [weak self] event in
             Task { @MainActor [weak self] in
                 self?.handleDictationAudioSessionEvent(event)
+            }
+        }
+        computerUseAudioSessionManager.onEvent = { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleComputerUseAudioSessionEvent(event)
             }
         }
         dictationAudioRoutingController.onPreferredInputDeviceChanged = { [weak self] _ in
@@ -471,6 +486,9 @@ final class MuesliController: NSObject {
                 self.hotkeyMonitor.cancelToggleMode()
             }
             self.indicator.isToggleDictation = false
+        }
+        indicator.onCancelComputerUse = { [weak self] in
+            self?.handleComputerUseCancel()
         }
         indicator.onPositionSaved = { [weak self] center in
             self?.updateConfig {
@@ -666,7 +684,7 @@ final class MuesliController: NSObject {
         activeMeetingAudioWarning = nil
         endMeetingActivity()
         dictationAudioSessionManager.cancel(reason: "shutdown")
-        computerUseRecorder.cancel()
+        computerUseAudioSessionManager.cancel(reason: "shutdown")
         Task {
             await transcriptionCoordinator.shutdown()
         }
@@ -5158,42 +5176,30 @@ final class MuesliController: NSObject {
     private func handleComputerUsePrepare() {
         guard canPrepareComputerUseCommand else { return }
         fputs("[cua] prepare\n", stderr)
+        if computerUseLatencyTraceID == nil {
+            beginComputerUseLatencyTrace(reason: "prepare")
+        }
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
-        computerUseRecorder.preferredInputDeviceID = nil
+        markComputerUseLatency("prepare_requested")
         setState(.preparing)
-        do {
-            try computerUseRecorder.prepare()
-        } catch {
-            fputs("[cua] recorder prepare failed: \(error)\n", stderr)
-            computerUseRecorder.cancel()
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
-        }
+        computerUseAudioSessionManager.arm(source: "cua-hotkey-arm")
     }
 
     private func handleComputerUseStart() {
         guard canStartComputerUseCommand else { return }
         fputs("[cua] recording start\n", stderr)
-        meetingMonitor.suppressWhileActive()
-        computerUseRecorder.preferredInputDeviceID = nil
-        do {
-            try computerUseRecorder.start()
-            computerUseCommandStartedAt = Date()
-            indicator.powerProvider = { [weak self] in
-                self?.computerUseRecorder.currentPower() ?? -160
-            }
-            setState(.recording)
-            SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
-        } catch {
-            fputs("[cua] recorder start failed: \(error)\n", stderr)
-            computerUseRecorder.cancel()
-            computerUseCommandStartedAt = nil
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
-            meetingMonitor.refreshState()
+        if computerUseLatencyTraceID == nil {
+            beginComputerUseLatencyTrace(reason: "hotkey")
         }
+        meetingMonitor.suppressWhileActive()
+        markComputerUseLatency("start_requested")
+        setState(.preparing)
+        computerUseAudioSessionManager.beginRecording(
+            mode: "cua-hold-start",
+            duckingEnabled: config.muteSystemAudioDuringDictation,
+            mediaPauseEnabled: config.pauseMediaDuringDictation
+        )
     }
 
     private func handleComputerUseToggleStart() {
@@ -5214,23 +5220,40 @@ final class MuesliController: NSObject {
 
     private func handleComputerUseCancel() {
         fputs("[cua] cancel\n", stderr)
+        let hadInFlightCommand = computerUseCommandTask != nil
+        if computerUseLatencyTraceID != nil {
+            finishComputerUseLatencyTrace("cancelled")
+        }
         computerUseCommandTask?.cancel()
         computerUseCommandTask = nil
-        computerUseRecorder.cancel()
+        computerUseAudioSessionManager.cancel(reason: "cua-user-cancel")
         computerUseCommandStartedAt = nil
+        pendingComputerUseStopSessionID = nil
+        pendingComputerUseStopStartedAt = nil
         indicator.isToggleDictation = false
+        indicator.hideComputerUseCursor()
         setState(.idle)
+        if hadInFlightCommand {
+            indicator.showWarning("CUA cancelled", icon: "!")
+        }
         meetingMonitor.resumeAfterCooldown()
     }
 
     private func handleComputerUseStop() {
         fputs("[cua] stop\n", stderr)
         indicator.isToggleDictation = false
-        let startedAt = computerUseCommandStartedAt ?? Date()
+        markComputerUseLatency("stop_requested")
+        pendingComputerUseStopSessionID = computerUseAudioSessionManager.currentSessionID
+        pendingComputerUseStopStartedAt = computerUseCommandStartedAt ?? Date()
         computerUseCommandStartedAt = nil
+        computerUseAudioSessionManager.stop()
+    }
 
-        guard let wavURL = computerUseRecorder.stop() else {
+    private func finishComputerUseAudioStop(wavURL stoppedWavURL: URL?, startedAt: Date) {
+        markComputerUseLatency("stop_finished")
+        guard let wavURL = stoppedWavURL else {
             fputs("[cua] stop without wav\n", stderr)
+            finishComputerUseLatencyTrace("stop_without_wav")
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
             return
@@ -5239,6 +5262,7 @@ final class MuesliController: NSObject {
         if duration < 0.3 {
             fputs("[cua] discarded short recording\n", stderr)
             try? FileManager.default.removeItem(at: wavURL)
+            finishComputerUseLatencyTrace("short_recording")
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
             return
@@ -5246,6 +5270,7 @@ final class MuesliController: NSObject {
 
         indicator.setTranscribingTitle("Parsing command", config: config)
         setState(.transcribing)
+        finishComputerUseLatencyTrace("ready_for_transcription")
         let task = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -5341,6 +5366,7 @@ final class MuesliController: NSObject {
         let result = await runtime.run(command: transcript)
         indicator.hideComputerUseCursor()
         if result.status == .cancelled {
+            persistComputerUseTrace(result, dictationID: dictationID)
             computerUseCommandTask = nil
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
@@ -5366,13 +5392,16 @@ final class MuesliController: NSObject {
         computerUseLastFloatingStatusAt = .distantPast
         computerUseLastFloatingStatus = ""
         computerUseTranscriptVisible = false
+        computerUseTranscriptDwellUntil = .distantPast
     }
 
     @MainActor
     private func presentComputerUseTranscript(_ transcript: String) {
+        let now = Date()
         computerUseTranscriptVisible = true
         computerUseLastFloatingStatusAt = .distantPast
         computerUseLastFloatingStatus = ""
+        computerUseTranscriptDwellUntil = now.addingTimeInterval(computerUseTranscriptDwellDuration(for: transcript))
         indicator.showComputerUseTranscript(transcript, config: config)
     }
 
@@ -5390,6 +5419,14 @@ final class MuesliController: NSObject {
         guard floatingStatus != computerUseLastFloatingStatus else { return }
 
         let now = Date()
+        if computerUseTranscriptVisible {
+            let transcriptRemaining = computerUseTranscriptDwellUntil.timeIntervalSince(now)
+            if transcriptRemaining > 0, !isTerminalComputerUseFloatingStatus(floatingStatus) {
+                scheduleComputerUseFloatingStatus(floatingStatus, after: max(0.08, transcriptRemaining))
+                return
+            }
+        }
+
         let elapsed = now.timeIntervalSince(computerUseLastFloatingStatusAt)
         if shouldShowComputerUseStatusImmediately(floatingStatus, elapsed: elapsed) {
             computerUseFloatingStatusWorkItem?.cancel()
@@ -5399,12 +5436,17 @@ final class MuesliController: NSObject {
         }
 
         let delay = max(0.08, computerUseFloatingStatusMinimumDwell - elapsed)
+        scheduleComputerUseFloatingStatus(floatingStatus, after: delay)
+    }
+
+    @MainActor
+    private func scheduleComputerUseFloatingStatus(_ status: String, after delay: TimeInterval) {
         computerUseFloatingStatusWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 guard self.dictationState == .transcribing else { return }
-                self.applyComputerUseFloatingStatus(floatingStatus, at: Date())
+                self.applyComputerUseFloatingStatus(status, at: Date())
                 self.computerUseFloatingStatusWorkItem = nil
             }
         }
@@ -5449,6 +5491,17 @@ final class MuesliController: NSObject {
             return false
         }
         return true
+    }
+
+    @MainActor
+    private func computerUseTranscriptDwellDuration(for transcript: String) -> TimeInterval {
+        let normalizedCount = transcript.trimmingCharacters(in: .whitespacesAndNewlines).count
+        return min(3.2, max(1.4, Double(normalizedCount) / 55.0))
+    }
+
+    @MainActor
+    private func isTerminalComputerUseFloatingStatus(_ status: String) -> Bool {
+        status == "Done" || status == "Failed" || status == "Confirm"
     }
 
     @MainActor
@@ -5664,6 +5717,35 @@ final class MuesliController: NSObject {
         dictationLatencyTraceStartedAt = nil
     }
 
+    private func beginComputerUseLatencyTrace(reason: String) {
+        computerUseLatencyTraceID = UUID()
+        computerUseLatencyTraceStartedAt = Date()
+        markComputerUseLatency("trace_begin:\(reason)")
+    }
+
+    private func markComputerUseLatency(_ event: String) {
+        markComputerUseLatency(event, at: Date())
+    }
+
+    private func markComputerUseLatency(_ event: String, at date: Date) {
+        guard let traceID = computerUseLatencyTraceID,
+              let startedAt = computerUseLatencyTraceStartedAt else { return }
+        let elapsedMS = Int(date.timeIntervalSince(startedAt) * 1000)
+        let timestamp = dictationLatencyTimestampFormatter.string(from: date)
+        let routeKind = dictationAudioRoutingController.currentOutputRouteKindForDebug()
+        let routeDescription = dictationAudioRoutingController.currentRouteDebugDescription()
+        let preferredInput = computerUseRecorder.preferredInputDeviceID.map(String.init) ?? "default"
+        let line = "[cua-latency] ts=\(timestamp) id=\(traceID.uuidString) event=\(event) elapsed_ms=\(elapsedMS) profile=\(dictationLatencyProfile(routeKind: routeKind)) preferredInput=\(preferredInput) \(routeDescription)"
+        fputs("\(line)\n", stderr)
+        appendDictationLatencyLog(line)
+    }
+
+    private func finishComputerUseLatencyTrace(_ event: String) {
+        markComputerUseLatency(event)
+        computerUseLatencyTraceID = nil
+        computerUseLatencyTraceStartedAt = nil
+    }
+
     private func cachedPreferredDictationInputDeviceID() -> AudioObjectID? {
         dictationAudioRoutingController.cachedPreferredInputDeviceIDForDictation()
     }
@@ -5727,6 +5809,67 @@ final class MuesliController: NSObject {
             finishDictationLatencyTrace("audio_session_failed")
         case .latency(let event, let date):
             markDictationLatency(event, at: date)
+        }
+    }
+
+    private func handleComputerUseAudioSessionEvent(_ event: DictationAudioSessionEvent) {
+        switch event {
+        case .armed:
+            break
+        case .acquiringAudio:
+            markComputerUseLatency("acquiring_audio")
+            setState(.preparing)
+        case .streamActive(_, let capturedAt):
+            markComputerUseLatency("ui_stream_active_received", at: capturedAt)
+            if computerUseCommandStartedAt == nil {
+                computerUseCommandStartedAt = capturedAt
+            }
+            indicator.powerProvider = { [weak self] in
+                self?.computerUseAudioSessionManager.currentPower() ?? -160
+            }
+            setState(.recording)
+            markComputerUseLatency("sound_start_requested:stream-active")
+            SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
+            markComputerUseLatency("ui_stream_active")
+        case .speechDetected(_, let capturedAt):
+            markComputerUseLatency("ui_speech_active", at: capturedAt)
+        case .noAudioTimeout:
+            statusBarController?.setStatus("CUA mic waiting for speech")
+        case .stopped(let eventSessionID, let wavURL):
+            guard pendingComputerUseStopSessionID == eventSessionID else {
+                fputs("[cua] ignoring stale stopped event\n", stderr)
+                if let wavURL {
+                    try? FileManager.default.removeItem(at: wavURL)
+                }
+                break
+            }
+            guard computerUseAudioSessionManager.currentSessionID == nil else {
+                fputs("[cua] ignoring stopped event while a new CUA session is active\n", stderr)
+                if let wavURL {
+                    try? FileManager.default.removeItem(at: wavURL)
+                }
+                break
+            }
+            let startedAt = pendingComputerUseStopStartedAt ?? computerUseCommandStartedAt ?? Date()
+            pendingComputerUseStopSessionID = nil
+            pendingComputerUseStopStartedAt = nil
+            finishComputerUseAudioStop(wavURL: wavURL, startedAt: startedAt)
+        case .audioRestored:
+            break
+        case .cancelled:
+            break
+        case .failed(_, let error):
+            fputs("[cua] recorder session failed: \(error)\n", stderr)
+            computerUseCommandStartedAt = nil
+            pendingComputerUseStopSessionID = nil
+            pendingComputerUseStopStartedAt = nil
+            setState(.idle)
+            indicator.showWarning("CUA mic failed", icon: "!")
+            meetingMonitor.resumeAfterCooldown()
+            meetingMonitor.refreshState()
+            finishComputerUseLatencyTrace("audio_session_failed:\(error.localizedDescription)")
+        case .latency(let event, let date):
+            markComputerUseLatency(event, at: date)
         }
     }
 

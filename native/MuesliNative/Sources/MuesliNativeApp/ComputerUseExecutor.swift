@@ -103,6 +103,10 @@ enum ComputerUseToolExecutor {
             return moveCursor(toolCall, registry: registry)
         case .click, .clickElement, .clickPoint:
             return click(toolCall, registry: registry)
+        case .focusElement:
+            return await focusElement(toolCall, registry: registry)
+        case .activateFocused:
+            return await activateFocused(toolCall)
         case .performSecondaryAction:
             return performSecondaryAction(toolCall, registry: registry)
         case .setValue:
@@ -110,10 +114,7 @@ enum ComputerUseToolExecutor {
         case .drag:
             return drag(toolCall, registry: registry)
         case .pressKey, .hotkey:
-            return pressKey(ComputerUseKeyCommand(
-                modifiers: toolCall.modifiers ?? [],
-                key: toolCall.key ?? ""
-            ))
+            return await pressKey(toolCall, registry: registry)
         case .typeText:
             return await enterText(toolCall, registry: registry, mode: .keyboard)
         case .pasteText:
@@ -272,21 +273,124 @@ enum ComputerUseToolExecutor {
         return await openApp(named: name)
     }
 
-    private static func pressKey(_ command: ComputerUseKeyCommand) -> ComputerUseExecutionResult {
+    private static func pressKey(
+        _ toolCall: ComputerUseToolCall,
+        registry: ComputerUseElementRegistry?
+    ) async -> ComputerUseExecutionResult {
+        let targetApp = await prepareTextEntryApp(toolCall, shouldActivateNamedApp: !toolCall.canonicalBundleID.isEmpty || toolCall.appName?.isEmpty == false)
+        if case let .failure(message) = targetApp {
+            return .failed(message)
+        }
+        if case .cancelled = targetApp {
+            return .cancelled()
+        }
+        let command = ComputerUseKeyCommand(
+            modifiers: toolCall.modifiers ?? [],
+            key: toolCall.key ?? ""
+        )
         guard let keyCode = keyCode(for: command.key),
               let source = CGEventSource(stateID: .combinedSessionState)
         else {
             return .unsupported("Unsupported key \(command.key)")
         }
 
+        let processID = targetProcessID(toolCall: toolCall, app: targetApp.app, element: nil)
         let flags = cgFlags(for: command.modifiers)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         keyDown?.flags = flags
         keyUp?.flags = flags
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        postKeyEvent(keyDown, processID: processID)
+        postKeyEvent(keyUp, processID: processID)
         return .executed("Pressed key")
+    }
+
+    private static func focusElement(
+        _ toolCall: ComputerUseToolCall,
+        registry: ComputerUseElementRegistry?
+    ) async -> ComputerUseExecutionResult {
+        let targetApp = await prepareTextEntryApp(
+            toolCall,
+            shouldActivateNamedApp: !toolCall.canonicalBundleID.isEmpty || toolCall.appName?.isEmpty == false
+        )
+        if case let .failure(message) = targetApp {
+            return .failed(message)
+        }
+        if case .cancelled = targetApp {
+            return .cancelled()
+        }
+        guard let elementResult = elementTarget(toolCall, registry: registry) else {
+            return .failed("focus_element requires element_index or element_id")
+        }
+        let element: AXUIElement
+        switch elementResult {
+        case .failure(let message):
+            return .failed(message)
+        case .success(let resolved):
+            element = resolved
+        }
+        switch await focusElement(element, label: toolCall.label ?? elementTargetLabel(toolCall)) {
+        case .success:
+            return .executed("Focused \(elementTargetLabel(toolCall))")
+        case .failure(let message):
+            return .failed(message)
+        case .cancelled:
+            return .cancelled()
+        }
+    }
+
+    private static func activateFocused(_ toolCall: ComputerUseToolCall) async -> ComputerUseExecutionResult {
+        let targetApp = await prepareTextEntryApp(
+            toolCall,
+            shouldActivateNamedApp: !toolCall.canonicalBundleID.isEmpty || toolCall.appName?.isEmpty == false
+        )
+        if case let .failure(message) = targetApp {
+            return .failed(message)
+        }
+        if case .cancelled = targetApp {
+            return .cancelled()
+        }
+        guard AXIsProcessTrusted() else {
+            return .failed("Accessibility permission required")
+        }
+        let requiredProcessID = toolCall.processID.map(pid_t.init)
+        guard let element = focusedUIElement(requiredApp: targetApp.app, requiredProcessID: requiredProcessID) else {
+            let target = toolCall.processID.map { " for pid \($0)" } ?? ""
+            return .failed("No focused UI element\(target). Use get_app_state/get_window_state to inspect focus, or move focus with click_element/press_key tab before activate_focused.")
+        }
+
+        let fallbackLabel = focusedElementLabel(element, fallback: toolCall.label)
+        if isRiskyActionLabel([fallbackLabel, toolCall.label, toolCall.reason].compactMap { $0 }.joined(separator: " ")) {
+            return .needsConfirmation("Confirm: activate focused \(fallbackLabel)")
+        }
+        if axBool(element, kAXEnabledAttribute) == false {
+            return .failed("\(fallbackLabel) is disabled; activate_focused would likely be a no-op")
+        }
+        if let rect = rect(of: element) {
+            ComputerUseCursorOverlay.shared.show(
+                at: CGPoint(x: rect.midX, y: rect.midY),
+                label: toolCall.label ?? fallbackLabel
+            )
+        }
+
+        let advertisedActions = actionNames(of: element)
+        if advertisedActions?.contains(kAXPressAction as String) != false,
+           AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
+            return .executed("Sent AXPress to focused \(fallbackLabel); inspect the post-action screenshot/state to decide whether the UI changed as intended")
+        }
+
+        guard let keyCode = keyCode(for: "enter"),
+              let source = CGEventSource(stateID: .combinedSessionState)
+        else {
+            let actions = (advertisedActions ?? []).isEmpty ? "none" : (advertisedActions ?? []).joined(separator: ", ")
+            return .unsupported("Focused \(fallbackLabel) does not support AXPress and Enter fallback could not be created (actions: \(actions)).")
+        }
+        let processID = targetProcessID(toolCall: toolCall, app: targetApp.app, element: element)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+        postKeyEvent(keyDown, processID: processID)
+        postKeyEvent(keyUp, processID: processID)
+        return .executed("Sent Enter to focused \(fallbackLabel); inspect the post-action screenshot/state to decide whether the UI changed as intended")
     }
 
     private static func scroll(_ toolCall: ComputerUseToolCall, registry: ComputerUseElementRegistry?) -> ComputerUseExecutionResult {
@@ -498,7 +602,7 @@ enum ComputerUseToolExecutor {
         registry: ComputerUseElementRegistry?,
         mode: TextEntryMode
     ) async -> ComputerUseExecutionResult {
-        let targetApp = await prepareTextEntryApp(toolCall)
+        let targetApp = await prepareTextEntryApp(toolCall, shouldActivateNamedApp: !toolCall.canonicalBundleID.isEmpty || toolCall.appName?.isEmpty == false)
         if case let .failure(message) = targetApp {
             return .failed(message)
         }
@@ -507,6 +611,15 @@ enum ComputerUseToolExecutor {
         }
         let app = targetApp.app
 
+        var explicitElement: AXUIElement?
+        if let elementResult = elementTarget(toolCall, registry: registry) {
+            switch elementResult {
+            case .failure(let message):
+                return .failed(message)
+            case .success(let element):
+                explicitElement = element
+            }
+        }
         if let elementResult = await focusTextEntryElement(toolCall, registry: registry) {
             if case let .failure(message) = elementResult {
                 return .failed(message)
@@ -516,14 +629,37 @@ enum ComputerUseToolExecutor {
             }
         }
 
-        guard focusedEditableTextTarget(requiredApp: app) != nil else {
+        let focusedElement = focusedEditableTextTarget(requiredApp: app)
+        let targetElement: AXUIElement?
+        if let explicitElement, isTextEntryTarget(explicitElement) {
+            targetElement = explicitElement
+        } else {
+            targetElement = focusedElement
+        }
+        guard let targetElement, isTextEntryTarget(targetElement) else {
             let target = textEntryTargetDescription(app: app, toolCall: toolCall)
-            return .failed("No focused editable text target\(target). Click an editable note body, title, text field, or text area before using \(mode.toolName).")
+            return .failed("No focused editable text target\(target). Use element_index/element_id from the latest get_window_state for the editable field, note body, web editor, or document editing area before using \(mode.toolName).")
         }
 
+        let text = toolCall.text ?? ""
+        let valueBeforeAXSelectedText = axString(targetElement, kAXValueAttribute)
+        if setSelectedText(text, in: targetElement) {
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch is CancellationError {
+                return .cancelled()
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+            if textWriteReadbackConfirms(text, beforeValue: valueBeforeAXSelectedText, in: targetElement) {
+                return .executed("Inserted text via AXSelectedText")
+            }
+        }
+
+        let processID = targetProcessID(toolCall: toolCall, app: app, element: targetElement)
         switch mode {
         case .keyboard:
-            PasteController.typeText(toolCall.text ?? "")
+            PasteController.typeText(text, processID: processID)
             do {
                 try await Task.sleep(nanoseconds: 250_000_000)
             } catch is CancellationError {
@@ -532,7 +668,7 @@ enum ComputerUseToolExecutor {
                 return .failed(error.localizedDescription)
             }
         case .paste:
-            PasteController.paste(text: toolCall.text ?? "")
+            PasteController.paste(text: text, processID: processID)
             do {
                 try await Task.sleep(nanoseconds: 700_000_000)
             } catch is CancellationError {
@@ -566,9 +702,21 @@ enum ComputerUseToolExecutor {
         case failure(String)
     }
 
-    private static func prepareTextEntryApp(_ toolCall: ComputerUseToolCall) async -> AppPreparationResult {
+    private static func prepareTextEntryApp(
+        _ toolCall: ComputerUseToolCall,
+        shouldActivateNamedApp: Bool
+    ) async -> AppPreparationResult {
+        if let processID = toolCall.processID,
+           let app = runningApplication(processID: pid_t(processID)),
+           !shouldActivateNamedApp {
+            return .success(app)
+        }
+
         let target = textEntryAppName(toolCall)
         guard !target.isEmpty else {
+            if let processID = toolCall.processID {
+                return .success(runningApplication(processID: pid_t(processID)))
+            }
             return .success(nil)
         }
 
@@ -612,9 +760,13 @@ enum ComputerUseToolExecutor {
         }
         guard let element else { return nil }
 
+        return await focusElement(element, label: toolCall.label)
+    }
+
+    private static func focusElement(_ element: AXUIElement, label: String?) async -> ElementFocusResult {
         _ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef)
         if let rect = rect(of: element) {
-            ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: toolCall.label)
+            ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: label)
         }
         _ = clickCenter(of: element)
         do {
@@ -866,6 +1018,10 @@ enum ComputerUseToolExecutor {
         }
     }
 
+    private static func runningApplication(processID: pid_t) -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first { $0.processIdentifier == processID }
+    }
+
     private static func openApplication(
         at url: URL,
         configuration: NSWorkspace.OpenConfiguration
@@ -989,7 +1145,7 @@ enum ComputerUseToolExecutor {
         return appName.isEmpty ? "" : " in \(appName)"
     }
 
-    private static func focusedEditableTextTarget(requiredApp: NSRunningApplication?) -> AXUIElement? {
+    private static func focusedUIElement(requiredApp: NSRunningApplication?, requiredProcessID: pid_t? = nil) -> AXUIElement? {
         guard AXIsProcessTrusted() else { return nil }
         let system = AXUIElementCreateSystemWide()
         var value: CFTypeRef?
@@ -999,12 +1155,26 @@ enum ComputerUseToolExecutor {
         else { return nil }
 
         let element = rawElement as! AXUIElement
+        if let requiredProcessID {
+            guard processID(of: element) == requiredProcessID else {
+                return nil
+            }
+        }
         if let requiredApp {
             guard processID(of: element) == requiredApp.processIdentifier else {
                 return nil
             }
         }
-        return isEditableTextElement(element) ? element : nil
+        return element
+    }
+
+    private static func focusedEditableTextTarget(requiredApp: NSRunningApplication?) -> AXUIElement? {
+        guard let element = focusedUIElement(requiredApp: requiredApp) else { return nil }
+        return isTextEntryTarget(element) ? element : nil
+    }
+
+    private static func isTextEntryTarget(_ element: AXUIElement) -> Bool {
+        isEditableTextElement(element) || isWebEditorSurface(element)
     }
 
     private static func isEditableTextElement(_ element: AXUIElement) -> Bool {
@@ -1030,6 +1200,86 @@ enum ComputerUseToolExecutor {
         return false
     }
 
+    private static func isWebEditorSurface(_ element: AXUIElement) -> Bool {
+        let role = axString(element, kAXRoleAttribute)
+        guard role == "AXWebArea" || role == "AXGroup" else { return false }
+        let combined = [
+            axString(element, kAXTitleAttribute),
+            axString(element, kAXDescriptionAttribute),
+            axString(element, kAXValueAttribute),
+            axString(element, kAXHelpAttribute),
+        ].joined(separator: " ").lowercased()
+        let editorTerms = [
+            "editing area",
+            "document editing",
+            "google docs",
+            "editor",
+            "editable",
+            "text area",
+            "textbox",
+        ]
+        return editorTerms.contains { combined.contains($0) }
+    }
+
+    private static func setSelectedText(_ text: String, in element: AXUIElement) -> Bool {
+        guard !text.isEmpty else { return true }
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFTypeRef
+        ) == .success
+    }
+
+    private static func textWriteReadbackConfirms(
+        _ text: String,
+        beforeValue: String,
+        in element: AXUIElement
+    ) -> Bool {
+        let value = axString(element, kAXValueAttribute)
+        let selectedText = axString(element, kAXSelectedTextAttribute)
+        if textSample(text).map({ containsNormalizedText(value, sample: $0) || containsNormalizedText(selectedText, sample: $0) }) == true {
+            return true
+        }
+        return !value.isEmpty && value != beforeValue
+    }
+
+    private static func textSample(_ text: String) -> String? {
+        let tokens = ComputerUseElementCandidate.normalizedText(text)
+            .split(separator: " ")
+        guard !tokens.isEmpty else { return nil }
+        return tokens.prefix(16).joined(separator: " ")
+    }
+
+    private static func containsNormalizedText(_ haystack: String, sample: String) -> Bool {
+        ComputerUseElementCandidate.normalizedText(haystack).contains(sample)
+    }
+
+    private static func targetProcessID(
+        toolCall: ComputerUseToolCall,
+        app: NSRunningApplication?,
+        element: AXUIElement?
+    ) -> pid_t? {
+        if let processID = toolCall.processID, processID > 0 {
+            return pid_t(processID)
+        }
+        if let app {
+            return app.processIdentifier
+        }
+        if let element {
+            return processID(of: element)
+        }
+        return nil
+    }
+
+    private static func postKeyEvent(_ event: CGEvent?, processID: pid_t?) {
+        guard let event else { return }
+        if let processID, processID > 0 {
+            event.postToPid(processID)
+        } else {
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
     private static func processID(of element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success else { return nil }
@@ -1051,6 +1301,43 @@ enum ComputerUseToolExecutor {
         var rawActions: CFArray?
         guard AXUIElementCopyActionNames(element, &rawActions) == .success else { return nil }
         return (rawActions as? [String]) ?? []
+    }
+
+    private static func focusedElementLabel(_ element: AXUIElement, fallback: String?) -> String {
+        for candidate in [
+            fallback,
+            axString(element, kAXTitleAttribute),
+            axString(element, kAXDescriptionAttribute),
+            axString(element, kAXValueAttribute),
+            axString(element, kAXHelpAttribute),
+            axString(element, kAXRoleAttribute),
+        ] {
+            let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return "element"
+    }
+
+    private static func isRiskyActionLabel(_ text: String) -> Bool {
+        let riskyWords: Set<String> = [
+            "archive",
+            "buy",
+            "cancel",
+            "checkout",
+            "confirm",
+            "delete",
+            "discard",
+            "pay",
+            "purchase",
+            "remove",
+            "send",
+            "submit",
+            "unsubscribe",
+        ]
+        let words = Set(canonicalLabel(text).split(separator: " ").map(String.init))
+        return !riskyWords.isDisjoint(with: words)
     }
 
     private static func clickCenter(of element: AXUIElement) -> Bool {

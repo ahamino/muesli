@@ -191,6 +191,19 @@ struct IndicatorFrameSizeTests {
         #expect(long.width <= 372)
         #expect(long.height > short.height)
     }
+
+    @Test("CUA transcript pill uses wider desktop space for complete commands")
+    @MainActor
+    func computerUseTranscriptPillUsesDesktopWidthForCommands() {
+        let size = FloatingIndicatorController.computerUseTranscriptPillSizeForTesting(
+            transcript: "Open Google Docs and write a concise four paragraph essay about computer use as the future of human computer interaction, making sure the tone is clear and accessible",
+            screenWidth: 1200
+        )
+
+        #expect(size.width > 720)
+        #expect(size.width <= 860)
+        #expect(size.height >= 44)
+    }
 }
 
 // MARK: - OpenAI Logo Shape

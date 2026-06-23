@@ -41,7 +41,8 @@ enum PasteController {
     static func paste(
         text: String,
         pasteboard: NSPasteboard = .general,
-        simulatePasteAction: @escaping () -> Void = PasteController.simulatePaste
+        processID: pid_t? = nil,
+        simulatePasteAction: (() -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
 
@@ -53,7 +54,11 @@ enum PasteController {
         let pasteChangeCount = pasteboard.changeCount
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            simulatePasteAction()
+            if let simulatePasteAction {
+                simulatePasteAction()
+            } else {
+                simulatePaste(processID: processID)
+            }
 
             // Restore the original clipboard contents after the receiving app has consumed the paste.
             DispatchQueue.main.asyncAfter(deadline: .now() + clipboardRestoreDelay) {
@@ -66,7 +71,7 @@ enum PasteController {
     /// Type text directly via CGEvent keyboard simulation without touching the clipboard.
     /// Common ASCII is posted as physical keydown+keyup events. Other text falls
     /// back to Unicode CGEvents so non-ASCII dictation still works.
-    static func typeText(_ text: String) {
+    static func typeText(_ text: String, processID: pid_t? = nil) {
         guard !text.isEmpty else { return }
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             fputs("[muesli-native] failed to create event source for typeText\n", stderr)
@@ -74,9 +79,9 @@ enum PasteController {
         }
         for char in text {
             if let (keyCode, flags) = physicalKeyMap[char] {
-                postPhysicalKey(source: source, keyCode: keyCode, flags: flags)
+                postPhysicalKey(source: source, keyCode: keyCode, flags: flags, processID: processID)
             } else {
-                postUnicodeCharacter(source: source, char: char)
+                postUnicodeCharacter(source: source, char: char, processID: processID)
             }
         }
     }
@@ -87,7 +92,7 @@ enum PasteController {
 
     // MARK: - Private
 
-    private static func simulatePaste() {
+    private static func simulatePaste(processID: pid_t? = nil) {
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             fputs("[muesli-native] failed to create event source for paste\n", stderr)
             return
@@ -97,21 +102,21 @@ enum PasteController {
         commandDown?.flags = .maskCommand
         let commandUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         commandUp?.flags = .maskCommand
-        commandDown?.post(tap: .cghidEventTap)
-        commandUp?.post(tap: .cghidEventTap)
+        post(commandDown, processID: processID)
+        post(commandUp, processID: processID)
     }
 
-    private static func postPhysicalKey(source: CGEventSource, keyCode: CGKeyCode, flags: CGEventFlags) {
+    private static func postPhysicalKey(source: CGEventSource, keyCode: CGKeyCode, flags: CGEventFlags, processID: pid_t?) {
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         else { return }
         keyDown.flags = flags
         keyUp.flags = flags
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        post(keyDown, processID: processID)
+        post(keyUp, processID: processID)
     }
 
-    private static func postUnicodeCharacter(source: CGEventSource, char: Character) {
+    private static func postUnicodeCharacter(source: CGEventSource, char: Character, processID: pid_t?) {
         var utf16 = Array(char.utf16)
         utf16.withUnsafeMutableBufferPointer { buf in
             guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -119,8 +124,17 @@ enum PasteController {
             else { return }
             keyDown.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
             keyUp.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
-            keyDown.post(tap: .cghidEventTap)
-            keyUp.post(tap: .cghidEventTap)
+            post(keyDown, processID: processID)
+            post(keyUp, processID: processID)
+        }
+    }
+
+    private static func post(_ event: CGEvent?, processID: pid_t?) {
+        guard let event else { return }
+        if let processID, processID > 0 {
+            event.postToPid(processID)
+        } else {
+            event.post(tap: .cghidEventTap)
         }
     }
 

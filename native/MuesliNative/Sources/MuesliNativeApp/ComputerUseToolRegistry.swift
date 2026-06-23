@@ -70,7 +70,7 @@ struct ComputerUseToolSchemaArrayItems: Codable, Equatable {
 }
 
 enum ComputerUseToolRegistry {
-    static let catalogVersion = "muesli-cua-tools-v1"
+    static let catalogVersion = "muesli-cua-tools-v4"
 
     static let definitions: [ComputerUseToolDefinition] = [
         definition(.listApps, "List running desktop apps with names, bundle IDs, process IDs, and active state.", required: [], properties: [:], risk: "safe read-only"),
@@ -81,12 +81,13 @@ enum ComputerUseToolRegistry {
         definition(.listWindows, "List visible windows, optionally scoped by app_bundle_id.", required: [], properties: [
             "app_bundle_id": .string("Optional bundle identifier to scope windows."),
         ], risk: "safe read-only"),
-        definition(.getAppState, "Capture fresh app/window state: state_id, app/window identity, screenshot metadata/image for the planner, AX candidates, focused element, selected text, cursor, and app hints.", required: [], properties: [
+        definition(.getAppState, "Capture fresh app/window state: state_id, process_id, window_id, screenshot metadata/image for the planner, OCR-backed visual text, AX candidates as optional hints, focused element, selected text, cursor, and app hints. Prefer get_window_state once a target process_id/window_id is known.", required: [], properties: [
             "app_bundle_id": .string("Optional app bundle to activate before capture."),
             "window_id": .integer("Optional window id hint."),
         ], risk: "safe read-only"),
-        definition(.getWindowState, "Compatibility alias for get_app_state. Prefer get_app_state for new planner calls.", required: [], properties: [
+        definition(.getWindowState, "Capture or refresh a specific target window. Prefer this when you already know process_id/window_id from latest_window_state or list_windows.", required: [], properties: [
             "app_bundle_id": .string("Optional app bundle to activate before capture."),
+            "process_id": .integer("Optional process id from latest_window_state or list_windows."),
             "window_id": .integer("Optional window id hint."),
         ], risk: "safe read-only"),
         definition(.moveCursor, "Move the visible Muesli CUA cursor to a screenshot coordinate without clicking. Use this before uncertain coordinate clicks to show intent.", required: ["screenshot_id", "x", "y"], properties: [
@@ -95,14 +96,16 @@ enum ComputerUseToolRegistry {
             "y": .number("Screenshot pixel y coordinate."),
             "label": .string("Human target label for live feedback and trace."),
         ], risk: "visual feedback only"),
-        definition(.clickElement, "Click an AX element from the latest get_app_state by element_index or element_id. Use this whenever a matching AX candidate exists.", required: [], properties: [
+        definition(.clickElement, "Click a reliable AX element from the latest get_app_state/get_window_state by element_index or element_id. Best for native macOS controls, dialogs, menus, and clearly exposed standard controls. For rich browser/web/canvas UIs such as YouTube, Docs, Sheets, and X/Twitter, prefer click_point on the visible screenshot target.", required: [], properties: [
+            "process_id": .integer("Optional process id from the latest state; helps keep the action tied to the intended app."),
+            "window_id": .integer("Optional window id from the latest state; helps keep the action tied to the intended window."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state, for example e12."),
             "clicks": .integer("1 for single click, 2 for double click."),
             "button": .string("left or right."),
             "label": .string("Human target label for trace and safety."),
         ], risk: "confirmation for risky labels"),
-        definition(.clickPoint, "Click a screenshot coordinate when no AX target exists. Requires screenshot_id plus x/y from the latest state.", required: ["screenshot_id", "x", "y"], properties: [
+        definition(.clickPoint, "Click a visible screenshot coordinate. This is the primary pointer action for rich browser/web/canvas UIs and any visually obvious target where AX is generic, ambiguous, or unreliable. Requires screenshot_id plus x/y from the latest state.", required: ["screenshot_id", "x", "y"], properties: [
             "screenshot_id": .string("Current screenshot id."),
             "x": .number("Screenshot pixel x coordinate."),
             "y": .number("Screenshot pixel y coordinate."),
@@ -110,35 +113,61 @@ enum ComputerUseToolRegistry {
             "button": .string("left or right."),
             "label": .string("Human target label for trace and safety."),
         ], risk: "confirmation for risky labels or unknown coordinate targets"),
-        definition(.performSecondaryAction, "Perform an advertised AX action other than AXPress on an element from the latest get_app_state. Use only action_name values present on that element's action_names.", required: ["action_name"], properties: [
+        definition(.focusElement, "Move keyboard/accessibility focus to a reliable AX element from the latest get_window_state/get_app_state without activating it as a button/link. Use mainly for native controls, standard editable fields, or clearly exposed web edit targets before press_key/type_text/paste_text. Avoid using this to walk generic web areas or visual search results; prefer click_point there. Element references are snapshot-scoped and expire after the next state capture.", required: [], properties: [
+            "process_id": .integer("Optional process id from the latest state; helps keep the action tied to the intended app."),
+            "window_id": .integer("Optional window id from the latest state; helps keep the action tied to the intended window."),
+            "element_index": .integer("Temporary element index from the latest state."),
+            "element_id": .string("Temporary element id from the latest state, for example e12."),
+            "label": .string("Human target label for trace."),
+        ], risk: "focus movement only; does not activate buttons or links"),
+        definition(.activateFocused, "Send an activation primitive to the currently focused UI element without changing focus first. Best for native buttons, menu items, dialogs, and explicit focused controls after keyboard navigation. Avoid this for generic web areas, action menus, and rich web search results; use screenshot-backed click_point for visible web targets. Attempts AXPress on current focus and falls back to Enter on the focused app.", required: [], properties: [
+            "app_name": .string("Optional target app name. Use only to activate the app before reading current focus."),
+            "app_bundle_id": .string("Optional target app bundle identifier. Use only to activate the app before reading current focus."),
+            "process_id": .integer("Optional expected process id from latest_window_state; activation fails if current focus is in another process."),
+            "window_id": .integer("Optional window id from latest_window_state for trace continuity."),
+            "label": .string("Human focused target label for trace and safety."),
+        ], risk: "confirmation for risky labels; does not accept stale element ids"),
+        definition(.performSecondaryAction, "Perform an advertised AX action other than AXPress on an element from the latest get_app_state/get_window_state. Use only action_name values present on that element's action_names.", required: ["action_name"], properties: [
+            "process_id": .integer("Optional process id from the latest state."),
+            "window_id": .integer("Optional window id from the latest state."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state."),
             "action_name": .string("Advertised AX action name, for example AXShowMenu, AXConfirm, AXCancel, AXIncrement, AXDecrement, or AXScrollDownByPage."),
             "label": .string("Human target label for trace and safety."),
         ], risk: "only invokes advertised AX actions; confirmation for risky labels"),
-        definition(.setValue, "Set an AX element value by element_index/element_id from the latest state.", required: ["value"], properties: [
+        definition(.setValue, "Set a reliable native/standard AX element value by element_index/element_id from the latest state. Prefer type_text/paste_text for browser editors and free-form web editors that ignore AXValue.", required: ["value"], properties: [
+            "process_id": .integer("Optional process id from the latest state."),
+            "window_id": .integer("Optional window id from the latest state."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state."),
             "value": .string("Value to set."),
             "label": .string("Human target label for trace."),
         ], risk: "local validation only; no send/submit bypass"),
-        definition(.typeText, "Type literal text using keyboard input. Prefer app_name/app_bundle_id and, when available, element_index/element_id so Muesli can activate the app and focus the editable target before typing.", required: ["text"], properties: [
+        definition(.typeText, "Insert literal text into a target. Prefer process_id/window_id plus element_index/element_id from latest_window_state; Muesli focuses the element, tries AXSelectedText insertion with AX readback, then falls back to targeted key events. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
             "app_name": .string("Optional target app name, for example Notes."),
             "app_bundle_id": .string("Optional target app bundle identifier, for example com.apple.Notes."),
+            "process_id": .integer("Optional process id from latest_window_state or list_windows."),
+            "window_id": .integer("Optional window id from latest_window_state or list_windows."),
             "element_index": .integer("Optional temporary editable element index from the latest state."),
             "element_id": .string("Optional temporary editable element id from the latest state."),
             "text": .string("Text to type."),
             "label": .string("Human target label for trace."),
-        ], risk: "safe primitive; activates optional app target and requires focused editable text"),
-        definition(.pasteText, "Paste text into the focused editable field using the clipboard, then restore the user's clipboard. Prefer app_name/app_bundle_id and element_index/element_id when available. Prefer this for Apple Notes, native rich-text editors, and multi-word text insertion after focusing the editable target.", required: ["text"], properties: [
+        ], risk: "safe primitive; focuses optional element target and can route key events to a process"),
+        definition(.pasteText, "Paste or insert text into a target, then restore the user's clipboard if clipboard fallback is needed. Prefer process_id/window_id plus element_index/element_id when available. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
             "app_name": .string("Optional target app name, for example Notes."),
             "app_bundle_id": .string("Optional target app bundle identifier, for example com.apple.Notes."),
+            "process_id": .integer("Optional process id from latest_window_state or list_windows."),
+            "window_id": .integer("Optional window id from latest_window_state or list_windows."),
             "element_index": .integer("Optional temporary editable element index from the latest state."),
             "element_id": .string("Optional temporary editable element id from the latest state."),
             "text": .string("Text to paste."),
             "label": .string("Human target label for trace."),
-        ], risk: "safe primitive; temporarily uses clipboard and restores it"),
-        definition(.pressKey, "Press one key with optional modifiers.", required: ["key"], properties: [
+        ], risk: "safe primitive; can temporarily use clipboard and restores it"),
+        definition(.pressKey, "Press one key with optional modifiers into the current keyboard focus for the target app/process. This tool never accepts element_index or element_id and never changes focus first. Use focus_element before press_key only when you intentionally need to move focus to a specific snapshot element.", required: ["key"], properties: [
+            "app_name": .string("Optional target app name."),
+            "app_bundle_id": .string("Optional target app bundle identifier."),
+            "process_id": .integer("Optional process id from latest_window_state or list_windows."),
+            "window_id": .integer("Optional window id from latest_window_state or list_windows."),
             "key": .string("Key name, for example enter, tab, l, escape."),
             "modifiers": .array("Optional modifiers.", item: .string("Modifier", enumValues: ComputerUseKeyModifier.allCases.map(\.rawValue))),
         ], risk: "confirmation for Cmd-Q and Cmd-W"),
@@ -193,7 +222,7 @@ enum ComputerUseToolRegistry {
             "selector": .string("CSS selector."),
             "attributes": .array("Attributes to return.", item: .string("Attribute name.")),
         ], risk: "safe read-only"),
-        definition(.finish, "Finish when the user task is complete. Use reason for the final answer.", required: [], properties: [
+        definition(.finish, "Finish when the user task is complete. For writing/editing tasks, use only after you inspect latest AX state/screenshot and confirm the requested text or edit is visible, or a prior outcome verified it. Use reason for the final answer.", required: [], properties: [
             "reason": .string("Final user-facing result."),
         ], risk: "safe finalization"),
         definition(.fail, "Fail explicitly when blocked, unsupported, unsafe, or incomplete. Use reason to explain.", required: ["reason"], properties: [

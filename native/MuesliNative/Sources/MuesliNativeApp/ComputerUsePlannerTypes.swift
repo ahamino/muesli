@@ -10,6 +10,8 @@ enum ComputerUseToolName: String, Codable, Equatable, CaseIterable {
     case click
     case clickElement = "click_element"
     case clickPoint = "click_point"
+    case focusElement = "focus_element"
+    case activateFocused = "activate_focused"
     case performSecondaryAction = "perform_secondary_action"
     case setValue = "set_value"
     case typeText = "type_text"
@@ -157,9 +159,12 @@ struct ComputerUseWindowState: Codable, Equatable {
     let stateID: String
     let appName: String
     let bundleID: String
+    let processID: Int?
+    let windowID: Int?
     let windowTitle: String
     let windowFrame: ComputerUseRect?
     let screenshot: ComputerUseScreenshotObservation?
+    let screenshotOCRText: String?
     let cursorPosition: ComputerUseRect?
     let focusedElement: ComputerUseFocusedElement?
     let selectedText: String?
@@ -171,9 +176,12 @@ struct ComputerUseWindowState: Codable, Equatable {
         case stateID = "state_id"
         case appName = "app_name"
         case bundleID = "bundle_id"
+        case processID = "process_id"
+        case windowID = "window_id"
         case windowTitle = "window_title"
         case windowFrame = "window_frame"
         case screenshot
+        case screenshotOCRText = "screenshot_ocr_text"
         case cursorPosition = "cursor_position"
         case focusedElement = "focused_element"
         case selectedText = "selected_text"
@@ -182,13 +190,16 @@ struct ComputerUseWindowState: Codable, Equatable {
         case capturedAt = "captured_at"
     }
 
-    init(observation: ComputerUseObservation) {
+    init(observation: ComputerUseObservation, screenshotOCRText: String? = nil) {
         stateID = observation.stateID
         appName = observation.appName
         bundleID = observation.bundleID
+        processID = observation.processID
+        windowID = observation.windowID
         windowTitle = observation.windowTitle
         windowFrame = observation.windowFrame
         screenshot = observation.screenshot
+        self.screenshotOCRText = screenshotOCRText
         cursorPosition = observation.cursorPosition
         focusedElement = observation.focusedElement
         selectedText = observation.selectedText
@@ -201,9 +212,12 @@ struct ComputerUseWindowState: Codable, Equatable {
         stateID: String = ComputerUseObservation.newStateID(),
         appName: String,
         bundleID: String,
+        processID: Int? = nil,
+        windowID: Int? = nil,
         windowTitle: String,
         windowFrame: ComputerUseRect?,
         screenshot: ComputerUseScreenshotObservation?,
+        screenshotOCRText: String? = nil,
         cursorPosition: ComputerUseRect?,
         focusedElement: ComputerUseFocusedElement? = nil,
         selectedText: String? = nil,
@@ -214,9 +228,12 @@ struct ComputerUseWindowState: Codable, Equatable {
         self.stateID = stateID
         self.appName = appName
         self.bundleID = bundleID
+        self.processID = processID
+        self.windowID = windowID
         self.windowTitle = windowTitle
         self.windowFrame = windowFrame
         self.screenshot = screenshot
+        self.screenshotOCRText = screenshotOCRText
         self.cursorPosition = cursorPosition
         self.focusedElement = focusedElement
         self.selectedText = selectedText
@@ -230,6 +247,8 @@ struct ComputerUseWindowState: Codable, Equatable {
             stateID: stateID,
             appName: appName,
             bundleID: bundleID,
+            processID: processID,
+            windowID: windowID,
             windowTitle: windowTitle,
             windowFrame: windowFrame,
             screenshot: screenshot,
@@ -466,6 +485,13 @@ struct ComputerUseToolInvocation: Codable, Equatable {
                 return "click_point requires x and y"
             }
             return trimmed(screenshotID).isEmpty ? "click_point requires screenshot_id" : nil
+        case .focusElement:
+            if let elementIndex, elementIndex <= 0 {
+                return "focus_element element_index must be greater than 0"
+            }
+            return elementIndex == nil && trimmed(elementID).isEmpty ? "focus_element requires element_index or element_id" : nil
+        case .activateFocused:
+            return nil
         case .performSecondaryAction:
             if trimmed(actionName).isEmpty {
                 return "perform_secondary_action requires action_name"
@@ -536,7 +562,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
             return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .clickElement:
             return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
-        case .performSecondaryAction, .drag:
+        case .focusElement:
+            return false
+        case .activateFocused, .performSecondaryAction, .drag:
             return containsRiskyWord([label, reason].compactMap { $0 }.joined(separator: " "))
         case .pressKey, .hotkey:
             let mods = modifiers ?? []
@@ -550,7 +578,7 @@ struct ComputerUseToolInvocation: Codable, Equatable {
 
     var isMutating: Bool {
         switch tool {
-        case .launchApp, .moveCursor, .click, .clickElement, .clickPoint, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab:
+        case .launchApp, .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab:
             return true
         case .listApps, .listWindows, .getAppState, .getWindowState, .listBrowserTabs, .pageGetText, .pageQueryDOM, .finish, .fail:
             return false
@@ -586,6 +614,13 @@ struct ComputerUseToolInvocation: Codable, Equatable {
             return "click \(trimmed(label).isEmpty ? trimmed(elementID) : trimmed(label))"
         case .clickPoint:
             return "click \(trimmed(label).isEmpty ? "point" : trimmed(label)) at \(coordinateSummary(x, y))"
+        case .focusElement:
+            if let elementIndex {
+                return "focus element \(elementIndexLabel(elementIndex))"
+            }
+            return "focus \(trimmed(label).isEmpty ? trimmed(elementID) : trimmed(label))"
+        case .activateFocused:
+            return "activate focused \(trimmed(label).isEmpty ? "element" : trimmed(label))"
         case .performSecondaryAction:
             let target = elementIndex.map(elementIndexLabel) ?? trimmed(elementID)
             return "perform \(trimmed(actionName)) on \(target)"

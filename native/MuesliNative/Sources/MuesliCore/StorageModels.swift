@@ -189,6 +189,18 @@ public struct ComputerUseTraceEvent: Identifiable, Codable, Equatable, Sendable 
     public let status: String?
     public let step: Int?
     public let timestamp: String
+    public let debugPayload: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case title
+        case body
+        case status
+        case step
+        case timestamp
+        case debugPayload = "debug_payload"
+    }
 
     public init(
         id: UUID = UUID(),
@@ -197,7 +209,8 @@ public struct ComputerUseTraceEvent: Identifiable, Codable, Equatable, Sendable 
         body: String,
         status: String? = nil,
         step: Int? = nil,
-        timestamp: String = ISO8601DateFormatter().string(from: Date())
+        timestamp: String = ISO8601DateFormatter().string(from: Date()),
+        debugPayload: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -206,6 +219,7 @@ public struct ComputerUseTraceEvent: Identifiable, Codable, Equatable, Sendable 
         self.status = status
         self.step = step
         self.timestamp = timestamp
+        self.debugPayload = debugPayload
     }
 }
 

@@ -99,15 +99,18 @@ final class FloatingIndicatorController: NSObject {
     var onDiscardMeeting: (() -> Void)?
     var onToggleMeetingPause: (() -> Void)?
     var onCancelToggleDictation: (() -> Void)?
+    var onCancelComputerUse: (() -> Void)?
     var onPositionSaved: ((CGPoint) -> Void)?
     var isToggleDictation = false
     private var stopLayer: CALayer?
     private var transcribingTitle = "Transcribing"
     private var computerUseTranscriptText: String?
+    private var isComputerUseCancellationAvailable = false
     private var loadingSpinner: NSProgressIndicator?
     private var isShowingLoading = false
     private var isComputerUseCursorMode = false
     private var computerUseCursorReturnFrame: NSRect?
+    private static let computerUseCancelHitWidth: CGFloat = 34
 
     private enum WaveformAnimationMode {
         case level
@@ -122,6 +125,13 @@ final class FloatingIndicatorController: NSObject {
     var onStopToggleDictation: (() -> Void)?
 
     func handleClick(atX x: CGFloat? = nil) {
+        if state == .transcribing, isComputerUseCancellationAvailable {
+            if x == nil || (x ?? .greatestFiniteMagnitude) < Self.computerUseCancelHitWidth {
+                onCancelComputerUse?()
+            }
+            return
+        }
+
         if state == .recording, let x {
             if x < 30 {
                 if isMeetingRecording {
@@ -146,7 +156,9 @@ final class FloatingIndicatorController: NSObject {
     }
 
     func handleOptionClick() {
-        if isMeetingRecording, state == .recording {
+        if state == .transcribing, isComputerUseCancellationAvailable {
+            onCancelComputerUse?()
+        } else if isMeetingRecording, state == .recording {
             onDiscardMeeting?()
         } else if state == .recording {
             onCancelToggleDictation?()
@@ -260,6 +272,7 @@ final class FloatingIndicatorController: NSObject {
 
     func showComputerUseTranscript(_ transcript: String, config: AppConfig) {
         let normalized = Self.normalizedComputerUseTranscript(transcript)
+        isComputerUseCancellationAvailable = true
         computerUseTranscriptText = normalized.isEmpty ? nil : normalized
         transcribingTitle = normalized.isEmpty ? "Starting CUA" : normalized
         setState(.transcribing, config: config)
@@ -275,6 +288,7 @@ final class FloatingIndicatorController: NSObject {
         if state != .transcribing {
             transcribingTitle = "Transcribing"
             computerUseTranscriptText = nil
+            isComputerUseCancellationAvailable = false
         }
         if state != .recording {
             recordingWaveformMode = .level
@@ -356,18 +370,19 @@ final class FloatingIndicatorController: NSObject {
                 iconLabel.textColor = style.iconColor
                 configureTextLabelForTranscript(state == .transcribing && computerUseTranscriptText != nil)
                 textLabel.stringValue = style.title
+                textLabel.toolTip = style.title.isEmpty ? nil : style.title
                 textLabel.textColor = style.textColor
                 textLabel.animator().alphaValue = style.title.isEmpty ? 0 : 1
                 textLabel.isHidden = style.title.isEmpty
                 if state == .transcribing, computerUseTranscriptText != nil {
-                    layoutComputerUseTranscript(in: targetFrame.size, animated: true)
+                    layoutComputerUseTranscript(in: targetFrame.size, animated: duration > 0)
                 } else {
                     layoutLabels(
                         iconLabel: iconLabel,
                         textLabel: textLabel,
                         in: targetFrame.size,
                         hasTitle: !style.title.isEmpty,
-                        animated: true
+                        animated: duration > 0
                     )
                 }
             }
@@ -924,7 +939,11 @@ final class FloatingIndicatorController: NSObject {
         case .transcribing:
             // Animated wand beside "Transcribing" label, the pair centred in the pill.
             micIconView?.isHidden = true
-            iconLabel?.isHidden = true
+            if isComputerUseCancellationAvailable {
+                configureComputerUseCancelIcon(frameSize: frameSize)
+            } else {
+                iconLabel?.isHidden = true
+            }
             wandIconView?.isHidden = false
             if computerUseTranscriptText != nil {
                 layoutComputerUseTranscript(in: frameSize, animated: false)
@@ -933,6 +952,9 @@ final class FloatingIndicatorController: NSObject {
             if let wand = wandIconView {
                 let gap: CGFloat = 6
                 let horizontalPadding: CGFloat = 14
+                let leadingInset = isComputerUseCancellationAvailable
+                    ? Self.computerUseCancelHitWidth
+                    : horizontalPadding
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: 11, weight: .regular)
                 ]
@@ -940,10 +962,13 @@ final class FloatingIndicatorController: NSObject {
                     ceil((transcribingTitle as NSString).size(withAttributes: attrs).width),
                     ceil(textLabel?.intrinsicContentSize.width ?? 0)
                 ) + 8
-                let availableTextW = max(0, frameSize.width - iconSize.width - gap - (horizontalPadding * 2))
+                let availableTextW = max(0, frameSize.width - leadingInset - iconSize.width - gap - horizontalPadding)
                 let textW = min(measuredTextW, availableTextW)
                 let totalW = iconSize.width + gap + textW
-                let startX = (frameSize.width - totalW) / 2
+                let centeredStartX = (frameSize.width - totalW) / 2
+                let startX = isComputerUseCancellationAvailable
+                    ? max(leadingInset, centeredStartX)
+                    : centeredStartX
                 wand.frame = NSRect(x: startX, y: (frameSize.height - iconSize.height) / 2,
                                     width: iconSize.width, height: iconSize.height)
                 // Reposition text label to sit right of the wand.
@@ -960,6 +985,23 @@ final class FloatingIndicatorController: NSObject {
             iconLabel?.isHidden = true
             micIconView?.isHidden = true
         }
+    }
+
+    private func configureComputerUseCancelIcon(frameSize: NSSize) {
+        guard let iconLabel else { return }
+        let iconSize: CGFloat = 16
+        iconLabel.isHidden = false
+        iconLabel.alphaValue = 1
+        iconLabel.stringValue = "\u{2715}"
+        iconLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        iconLabel.textColor = .white.withAlphaComponent(0.58)
+        iconLabel.alignment = .center
+        iconLabel.frame = NSRect(
+            x: floor((Self.computerUseCancelHitWidth - iconSize) / 2),
+            y: floor((frameSize.height - iconSize) / 2),
+            width: iconSize,
+            height: iconSize
+        )
     }
 
     private func configureTextLabelForTranscript(_ isTranscript: Bool) {
@@ -988,11 +1030,17 @@ final class FloatingIndicatorController: NSObject {
 
     private func layoutComputerUseTranscript(in size: NSSize, animated: Bool) {
         guard let wand = wandIconView, let textLabel else { return }
+        if isComputerUseCancellationAvailable {
+            configureComputerUseCancelIcon(frameSize: size)
+        }
         let iconSize = NSSize(width: 18, height: 18)
         let gap: CGFloat = 8
         let horizontalPadding: CGFloat = 16
         let verticalPadding: CGFloat = 12
-        let textX = horizontalPadding + iconSize.width + gap
+        let leadingInset = isComputerUseCancellationAvailable
+            ? Self.computerUseCancelHitWidth + 2
+            : horizontalPadding
+        let textX = leadingInset + iconSize.width + gap
         let textWidth = max(40, size.width - textX - horizontalPadding)
         let textHeight = max(16, size.height - (verticalPadding * 2))
         let textFrame = NSRect(
@@ -1002,7 +1050,7 @@ final class FloatingIndicatorController: NSObject {
             height: textHeight
         )
         let iconFrame = NSRect(
-            x: horizontalPadding,
+            x: leadingInset,
             y: floor(size.height - verticalPadding - iconSize.height),
             width: iconSize.width,
             height: iconSize.height
@@ -1010,6 +1058,7 @@ final class FloatingIndicatorController: NSObject {
 
         wand.isHidden = false
         textLabel.isHidden = false
+        textLabel.toolTip = computerUseTranscriptText
         if animated {
             wand.animator().alphaValue = 1
             wand.animator().frame = iconFrame
@@ -1257,7 +1306,11 @@ final class FloatingIndicatorController: NSObject {
             if let transcript = computerUseTranscriptText {
                 size = Self.computerUseTranscriptPillSize(transcript: transcript, screen: screen)
             } else {
-                size = Self.transcribingPillSize(title: transcribingTitle, screenWidth: screen.width)
+                size = Self.transcribingPillSize(
+                    title: transcribingTitle,
+                    screenWidth: screen.width,
+                    includesCancelControl: isComputerUseCancellationAvailable
+                )
             }
         }
 
@@ -1332,6 +1385,9 @@ final class FloatingIndicatorController: NSObject {
         if oldState == .idle || newState == .idle {
             return 0.18
         }
+        if oldState == .transcribing, newState == .transcribing {
+            return 0
+        }
         return 0.16
     }
 
@@ -1399,7 +1455,7 @@ final class FloatingIndicatorController: NSObject {
     }
 
     static func transcribingPillSizeForTesting(title: String, screenWidth: CGFloat) -> NSSize {
-        transcribingPillSize(title: title, screenWidth: screenWidth)
+        transcribingPillSize(title: title, screenWidth: screenWidth, includesCancelControl: false)
     }
 
     static func computerUseTranscriptPillSizeForTesting(
@@ -1413,13 +1469,18 @@ final class FloatingIndicatorController: NSObject {
         )
     }
 
-    private static func transcribingPillSize(title: String, screenWidth: CGFloat) -> NSSize {
+    private static func transcribingPillSize(
+        title: String,
+        screenWidth: CGFloat,
+        includesCancelControl: Bool
+    ) -> NSSize {
         let font = NSFont.systemFont(ofSize: 11, weight: .regular)
         let iconWidth: CGFloat = 18
         let gap: CGFloat = 6
         let horizontalPadding: CGFloat = 14
+        let cancelWidth = includesCancelControl ? computerUseCancelHitWidth : 0
         let textWidth = ceil((title as NSString).size(withAttributes: [.font: font]).width) + 8
-        let preferredWidth = horizontalPadding + iconWidth + gap + textWidth + horizontalPadding
+        let preferredWidth = cancelWidth + horizontalPadding + iconWidth + gap + textWidth + horizontalPadding
         let minWidth = min(CGFloat(190), max(120, screenWidth - 32))
         let maxWidth = max(minWidth, min(420, screenWidth - 32))
         return NSSize(width: min(max(preferredWidth, minWidth), maxWidth), height: 32)
@@ -1432,15 +1493,15 @@ final class FloatingIndicatorController: NSObject {
         let gap: CGFloat = 8
         let horizontalPadding: CGFloat = 16
         let verticalPadding: CGFloat = 12
-        let chromeWidth = horizontalPadding + iconWidth + gap + horizontalPadding
+        let chromeWidth = computerUseCancelHitWidth + horizontalPadding + iconWidth + gap + horizontalPadding
         let minWidth = min(CGFloat(280), max(160, screen.width - 48))
-        let maxWidth = max(minWidth, min(720, screen.width - 48))
+        let maxWidth = max(minWidth, min(860, screen.width - 48))
         let singleLineTextWidth = ceil((normalized as NSString).size(withAttributes: [.font: font]).width) + 2
         let preferredWidth = min(maxWidth, max(minWidth, chromeWidth + singleLineTextWidth))
         let textWidth = max(40, preferredWidth - chromeWidth)
         let textHeight = transcriptTextHeight(normalized, font: font, width: textWidth)
         let maxHeight = max(CGFloat(56), screen.height - 48)
-        let preferredHeight = max(CGFloat(44), ceil(textHeight) + (verticalPadding * 2))
+        let preferredHeight = max(CGFloat(44), ceil(textHeight) + (verticalPadding * 2) + 4)
         return NSSize(width: preferredWidth, height: min(preferredHeight, maxHeight))
     }
 

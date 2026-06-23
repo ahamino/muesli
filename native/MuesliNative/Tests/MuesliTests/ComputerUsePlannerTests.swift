@@ -22,6 +22,10 @@ struct ComputerUseToolRegistryTests {
         #expect(docs.contains("Tool: get_window_state"))
         #expect(docs.contains("Tool: click_element"))
         #expect(docs.contains("Tool: click_point"))
+        #expect(docs.contains("primary pointer action for rich browser/web/canvas UIs"))
+        #expect(docs.contains("prefer click_point on the visible screenshot target"))
+        #expect(docs.contains("Tool: focus_element"))
+        #expect(docs.contains("Tool: activate_focused"))
         #expect(!docs.contains("Tool: click\n"))
         #expect(docs.contains("Tool: perform_secondary_action"))
         #expect(docs.contains("Tool: open_new_browser_tab"))
@@ -58,13 +62,45 @@ struct ComputerUseToolRegistryTests {
         #expect(instructions.contains("native tool call"))
         #expect(instructions.contains("Browser DOM/page tools are optional accelerators"))
         #expect(instructions.contains("Chrome Apple Events JavaScript permission"))
-        #expect(instructions.contains("AX/screenshot fallback"))
+        #expect(instructions.contains("The screenshot is the source of truth"))
+        #expect(instructions.contains("Prefer visual pointer/keyboard primitives for rich web UIs"))
+        #expect(instructions.contains("AX candidates, focused_element, DOM text, and OCR are hints"))
         #expect(instructions.contains("Do not use fail only because a browser DOM/page tool failed"))
+        #expect(instructions.contains("latest_window_state.process_id"))
+        #expect(instructions.contains("process_id/window_id"))
+        #expect(instructions.contains("Keyboard focus is state"))
+        #expect(instructions.contains("Use focus_element"))
+        #expect(instructions.contains("Use activate_focused"))
+        #expect(instructions.contains("avoid it for generic web areas and rich web search results"))
+        #expect(instructions.contains("press_key always sends a key to current focus"))
+        #expect(instructions.contains("That schema is invalid"))
+        #expect(instructions.contains("Use it for Google Docs"))
         #expect(instructions.contains("Do not call get_app_state/get_window_state repeatedly"))
-        #expect(instructions.contains("do not loop on observation"))
+        #expect(instructions.contains("do not fall into repeated AX focus/activate cycles"))
         #expect(instructions.contains("After open_new_browser_tab, call navigate_active_browser_tab"))
-        #expect(instructions.contains("prefer paste_text for multi-word text"))
+        #expect(instructions.contains("Prefer it for Apple Notes"))
         #expect(instructions.contains("Use finish only when the user's command is complete and successful"))
+    }
+
+    @Test("text and key tool schemas expose target identity")
+    func textAndKeyToolSchemasExposeTargetIdentity() {
+        let tools = ComputerUseToolRegistry.nativeToolDefinitions()
+
+        for name in ["type_text", "paste_text", "press_key", "focus_element", "activate_focused"] {
+            let tool = tools.first { ($0["name"] as? String) == name }
+            let parameters = tool?["parameters"] as? [String: Any]
+            let properties = parameters?["properties"] as? [String: Any]
+
+            #expect(properties?["process_id"] != nil)
+            #expect(properties?["window_id"] != nil)
+        }
+
+        let pressKey = tools.first { ($0["name"] as? String) == "press_key" }
+        let pressKeyParameters = pressKey?["parameters"] as? [String: Any]
+        let pressKeyProperties = pressKeyParameters?["properties"] as? [String: Any]
+        #expect((pressKey?["description"] as? String)?.contains("never accepts element_index or element_id") == true)
+        #expect(pressKeyProperties?["element_index"] == nil)
+        #expect(pressKeyProperties?["element_id"] == nil)
     }
 }
 
@@ -280,8 +316,14 @@ struct ComputerUsePlannerResponseTests {
         #expect(appState.toolCall.canonicalBundleID == windowState.toolCall.canonicalBundleID)
     }
 
-    @Test("decodes secondary action and element scroll")
-    func decodesSecondaryActionAndElementScroll() throws {
+    @Test("decodes focus focused activation secondary action and element scroll")
+    func decodesFocusFocusedActivationSecondaryActionAndElementScroll() throws {
+        let focus = try ComputerUsePlannerResponse.decodeJSON(
+            from: #"{"tool":"focus_element","process_id":123,"element_id":"e4","label":"Search"}"#
+        )
+        let focused = try ComputerUsePlannerResponse.decodeJSON(
+            from: #"{"tool":"activate_focused","process_id":123,"label":"Play"}"#
+        )
         let secondary = try ComputerUsePlannerResponse.decodeJSON(
             from: #"{"tool":"perform_secondary_action","element_index":3,"action_name":"AXShowMenu","label":"More"}"#
         )
@@ -289,6 +331,10 @@ struct ComputerUsePlannerResponseTests {
             from: #"{"tool":"scroll","element_id":"e7","direction":"down","pages":1}"#
         )
 
+        #expect(focus.toolCall.tool == .focusElement)
+        #expect(focus.toolCall.elementID == "e4")
+        #expect(focused.toolCall.tool == .activateFocused)
+        #expect(focused.toolCall.processID == 123)
         #expect(secondary.toolCall.tool == .performSecondaryAction)
         #expect(secondary.toolCall.actionName == "AXShowMenu")
         #expect(scroll.toolCall.tool == .scroll)
@@ -317,6 +363,12 @@ struct ComputerUsePlannerResponseTests {
             _ = try ComputerUsePlannerResponse.decodeNativeToolCall(
                 name: "finish",
                 arguments: #"{"reason":"done","url":"https://example.com"}"#
+            )
+        }
+        #expect(throws: Error.self) {
+            _ = try ComputerUsePlannerResponse.decodeNativeToolCall(
+                name: "press_key",
+                arguments: #"{"key":"enter","element_id":"e9"}"#
             )
         }
     }
@@ -430,7 +482,10 @@ struct ComputerUsePlannerRequestTests {
             command: "click search",
             step: 1,
             maxSteps: 100,
-            latestWindowState: ComputerUseWindowState(observation: ComputerUsePlannerRuntimeTests.observation(screenshot: ComputerUsePlannerRuntimeTests.screenshot())),
+            latestWindowState: ComputerUseWindowState(
+                observation: ComputerUsePlannerRuntimeTests.observation(screenshot: ComputerUsePlannerRuntimeTests.screenshot()),
+                screenshotOCRText: "Visible OCR text"
+            ),
             priorOutcomes: []
         )
         let data = try JSONEncoder().encode(request)
@@ -438,6 +493,8 @@ struct ComputerUsePlannerRequestTests {
 
         #expect(text.contains("screenshot_id"))
         #expect(text.contains("s1"))
+        #expect(text.contains("screenshot_ocr_text"))
+        #expect(text.contains("Visible OCR text"))
         #expect(!text.contains("data:image"))
         #expect(text.contains(ComputerUseToolRegistry.catalogVersion))
     }
@@ -923,10 +980,135 @@ struct ComputerUsePlannerRuntimeTests {
                 }
                 let outcome = request.priorOutcomes.last
                 #expect(outcome?.verificationStatus == .unchanged)
-                #expect(outcome?.message.contains("no focused value, selected text, or visible AX text change was observed") == true)
+                #expect(outcome?.message.contains("Inspect the latest screenshot") == true)
                 return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
             },
             execute: { _, _ in .executed("Pasted text") }
+        )
+
+        let result = await runtime.run(command: "write hello")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+    }
+
+    @Test("text action verifies requested text before finish")
+    @MainActor
+    func textActionVerifiesRequestedTextBeforeFinish() async {
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(screenshot: Self.screenshot())
+                }
+                return Self.observation(
+                    screenshot: Self.screenshot(),
+                    focusedValue: "hello from computer use"
+                )
+            },
+            plan: { request in
+                if request.step == 1 {
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: "hello from computer use"))
+                }
+                let outcome = request.priorOutcomes.last
+                #expect(outcome?.verificationStatus == .changed)
+                #expect(outcome?.message.contains("Observed requested text") == true)
+                return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+            },
+            execute: { _, _ in .executed("Pasted text") }
+        )
+
+        let result = await runtime.run(command: "write hello")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+    }
+
+    @Test("text action leaves screenshot completion decision to planner")
+    @MainActor
+    func textActionLeavesScreenshotCompletionDecisionToPlanner() async {
+        let requestedText = """
+        Computer Use as the Future of Human-Computer Interaction
+
+        Computer use is becoming the future of human-computer interaction because people are moving beyond simple clicks and typed commands.
+        """
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(stateID: "state-before", windowTitle: "Untitled", screenshot: Self.screenshot())
+                }
+                return Self.observation(stateID: "state-after", windowTitle: "Untitled", screenshot: Self.screenshot())
+            },
+            plan: { request in
+                if request.step == 1 {
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: requestedText))
+                }
+                let outcome = request.priorOutcomes.last
+                #expect(outcome?.verificationStatus == .unchanged)
+                #expect(outcome?.message.contains("AX did not expose the requested text") == true)
+                #expect(outcome?.message.contains("Inspect the latest screenshot") == true)
+                return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+            },
+            execute: { _, _ in .executed("Pasted text") }
+        )
+
+        let result = await runtime.run(command: "write about computer use")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+    }
+
+    @Test("runtime passes screenshot OCR text to planner as context")
+    @MainActor
+    func runtimePassesScreenshotOCRTextToPlannerAsContext() async {
+        var ocrCalls = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                Self.observation(screenshot: Self.screenshot())
+            },
+            plan: { request in
+                #expect(request.latestWindowState.screenshotOCRText == "Sheet contains pasted task text")
+                return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+            },
+            execute: { _, _ in .executed("unexpected") },
+            recognizeScreenshotText: { _ in
+                ocrCalls += 1
+                return "Sheet contains pasted task text"
+            }
+        )
+
+        let result = await runtime.run(command: "inspect sheet")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+        #expect(ocrCalls == 1)
+    }
+
+    @Test("text action UI change without requested text blocks finish")
+    @MainActor
+    func textActionUIChangeWithoutRequestedTextBlocksFinish() async {
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(stateID: "state-before", windowTitle: "Before", screenshot: Self.screenshot())
+                }
+                return Self.observation(stateID: "state-after", windowTitle: "After", screenshot: Self.screenshot())
+            },
+            plan: { request in
+                if request.step == 1 {
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .typeText, text: "hello from computer use"))
+                }
+                let outcome = request.priorOutcomes.last
+                #expect(outcome?.verificationStatus == .unknown)
+                #expect(outcome?.message.contains("AX did not expose the requested text") == true)
+                return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+            },
+            execute: { _, _ in .executed("Typed text") }
         )
 
         let result = await runtime.run(command: "write hello")
@@ -1037,7 +1219,9 @@ struct ComputerUsePlannerRuntimeTests {
                 }
                 #expect(request.priorOutcomes.last?.tool == .pageGetText)
                 #expect(request.priorOutcomes.last?.status == "failed")
-                #expect(request.priorOutcomes.last?.message.contains("Continue with get_app_state plus AX/screenshot tools") == true)
+                #expect(request.priorOutcomes.last?.message.contains("Continue with get_window_state and visual screenshot actions") == true)
+                #expect(request.priorOutcomes.last?.message.contains("prefer click_point on visible targets") == true)
+                #expect(request.priorOutcomes.last?.message.contains("avoid repeated focus_element/activate_focused cycles") == true)
                 return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "used screen fallback"))
             },
             execute: { toolCall, _ in
@@ -1052,6 +1236,38 @@ struct ComputerUsePlannerRuntimeTests {
         #expect(result.message == "used screen fallback")
         #expect(observeCount == 2)
         #expect(result.traceEvents.contains { $0.title == "Screen fallback" })
+    }
+
+    @Test("runtime trace stores compact debug payloads")
+    @MainActor
+    func runtimeTraceStoresCompactDebugPayloads() async {
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                Self.observation(
+                    appName: "Google Chrome",
+                    bundleID: "com.google.Chrome",
+                    windowTitle: "YouTube",
+                    screenshot: Self.screenshot(),
+                    elementValue: "Video result"
+                )
+            },
+            plan: { _ in
+                ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+            },
+            execute: { _, _ in .executed("unexpected") },
+            recognizeScreenshotText: { _ in "Video result OCR" }
+        )
+
+        let result = await runtime.run(command: "play a video")
+        let planningPayload = result.traceEvents.first { $0.kind == "planning" }?.debugPayload
+        let observationPayload = result.traceEvents.first { $0.kind == "observation" }?.debugPayload
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+        #expect(planningPayload?.contains(#""latest_window_state""#) == true)
+        #expect(planningPayload?.contains("Video result OCR") == true)
+        #expect(observationPayload?.contains(#""elements""#) == true)
+        #expect(observationPayload?.contains("Video result") == true)
     }
 
     @Test("invalid tool call is repaired through planner feedback")
@@ -1108,7 +1324,8 @@ struct ComputerUsePlannerRuntimeTests {
                 }
                 #expect(request.priorOutcomes.last?.tool == .typeText)
                 #expect(request.priorOutcomes.last?.status == "failed")
-                #expect(request.priorOutcomes.last?.message.contains("focus an editable target") == true)
+                #expect(request.priorOutcomes.last?.message.contains("process_id/window_id plus element_index") == true)
+                #expect(request.priorOutcomes.last?.message.contains("Prefer type_text for browser editors") == true)
                 return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "focused fallback available"))
             },
             execute: { toolCall, _ in
@@ -1149,7 +1366,8 @@ struct ComputerUsePlannerRuntimeTests {
                 }
                 #expect(request.priorOutcomes.last?.tool == .pasteText)
                 #expect(request.priorOutcomes.last?.status == "failed")
-                #expect(request.priorOutcomes.last?.message.contains("Prefer paste_text for Apple Notes") == true)
+                #expect(request.priorOutcomes.last?.message.contains("process_id/window_id plus element_index") == true)
+                #expect(request.priorOutcomes.last?.message.contains("paste_text for Apple Notes") == true)
                 return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "focused fallback available"))
             },
             execute: { toolCall, _ in
@@ -1248,7 +1466,9 @@ struct ComputerUsePlannerRuntimeTests {
         appName: String = "Test",
         bundleID: String = "com.example.Test",
         windowTitle: String = "Window",
-        screenshot: ComputerUseScreenshotObservation? = nil
+        screenshot: ComputerUseScreenshotObservation? = nil,
+        focusedValue: String = "",
+        elementValue: String = ""
     ) -> ComputerUseObservation {
         ComputerUseObservation(
             stateID: stateID,
@@ -1258,11 +1478,20 @@ struct ComputerUsePlannerRuntimeTests {
             windowFrame: nil,
             screenshot: screenshot,
             cursorPosition: ComputerUseRect(x: 10, y: 20, width: 1, height: 1),
+            focusedElement: focusedValue.isEmpty ? nil : ComputerUseFocusedElement(
+                role: "AXTextArea",
+                title: "",
+                label: "",
+                value: focusedValue,
+                frame: nil,
+                processID: nil
+            ),
             elements: [
                 ComputerUseObservationCapture.candidateForTests(
                     elementID: "e1",
                     role: "AXButton",
-                    title: "Send"
+                    title: "Send",
+                    value: elementValue
                 ),
             ],
             capturedAt: Date(timeIntervalSince1970: 0)

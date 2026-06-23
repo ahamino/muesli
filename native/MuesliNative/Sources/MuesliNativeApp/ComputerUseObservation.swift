@@ -98,6 +98,7 @@ struct ComputerUseFocusedElement: Codable, Equatable {
     let label: String
     let value: String
     let frame: ComputerUseRect?
+    let actionNames: [String]
     let processID: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -106,7 +107,26 @@ struct ComputerUseFocusedElement: Codable, Equatable {
         case label
         case value
         case frame
+        case actionNames = "action_names"
         case processID = "process_id"
+    }
+
+    init(
+        role: String,
+        title: String,
+        label: String,
+        value: String,
+        frame: ComputerUseRect?,
+        actionNames: [String] = [],
+        processID: Int?
+    ) {
+        self.role = role
+        self.title = title
+        self.label = label
+        self.value = value
+        self.frame = frame
+        self.actionNames = actionNames
+        self.processID = processID
     }
 
     var normalizedText: String {
@@ -162,6 +182,8 @@ struct ComputerUseObservation: Codable, Equatable {
     let stateID: String
     let appName: String
     let bundleID: String
+    let processID: Int?
+    let windowID: Int?
     let windowTitle: String
     let windowFrame: ComputerUseRect?
     let screenshot: ComputerUseScreenshotObservation?
@@ -176,6 +198,8 @@ struct ComputerUseObservation: Codable, Equatable {
         case stateID = "state_id"
         case appName = "app_name"
         case bundleID = "bundle_id"
+        case processID = "process_id"
+        case windowID = "window_id"
         case windowTitle = "window_title"
         case windowFrame = "window_frame"
         case screenshot
@@ -191,6 +215,8 @@ struct ComputerUseObservation: Codable, Equatable {
         stateID: String = Self.newStateID(),
         appName: String,
         bundleID: String,
+        processID: Int? = nil,
+        windowID: Int? = nil,
         windowTitle: String,
         windowFrame: ComputerUseRect?,
         screenshot: ComputerUseScreenshotObservation?,
@@ -204,6 +230,8 @@ struct ComputerUseObservation: Codable, Equatable {
         self.stateID = stateID
         self.appName = appName
         self.bundleID = bundleID
+        self.processID = processID
+        self.windowID = windowID
         self.windowTitle = windowTitle
         self.windowFrame = windowFrame
         self.screenshot = screenshot
@@ -352,6 +380,8 @@ enum ComputerUseObservationCapture {
             return ComputerUseObservation(
                 appName: appName,
                 bundleID: bundleID,
+                processID: app.map { Int($0.processIdentifier) },
+                windowID: nil,
                 windowTitle: "",
                 windowFrame: nil,
                 screenshot: nil,
@@ -369,6 +399,7 @@ enum ComputerUseObservationCapture {
         let root = window ?? axApp
         let windowTitle = window.map { axString($0, kAXTitleAttribute) } ?? ""
         let windowFrame = window.flatMap(rect)
+        let windowID = matchedWindowID(for: app, frame: windowFrame)
         let screenshot = includeScreenshot ? captureScreenshot(for: app, fallbackFrame: windowFrame) : nil
         registry.registerScreenshot(screenshot)
         let focusedElementSnapshot = focusedElementSnapshot(requiredPID: app.processIdentifier)
@@ -392,6 +423,8 @@ enum ComputerUseObservationCapture {
         return ComputerUseObservation(
             appName: appName,
             bundleID: bundleID,
+            processID: Int(app.processIdentifier),
+            windowID: windowID,
             windowTitle: windowTitle,
             windowFrame: windowFrame.map(ComputerUseRect.init),
             screenshot: screenshot,
@@ -605,6 +638,7 @@ enum ComputerUseObservationCapture {
             label: truncate(axString(element, kAXDescriptionAttribute), limit: 80),
             value: truncate(axString(element, kAXValueAttribute), limit: 160),
             frame: rect(element).map(ComputerUseRect.init),
+            actionNames: actionNames(of: element),
             processID: processID(of: element).map(Int.init)
         )
         return FocusedElementSnapshot(element: element, observation: observation)
@@ -659,6 +693,17 @@ enum ComputerUseObservationCapture {
                   [.bestResolution]
               ) else { return nil }
         return screenshotObservation(image: image, frame: displayFrame)
+    }
+
+    private static func matchedWindowID(for app: NSRunningApplication, frame: CGRect?) -> Int? {
+        let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] ?? []
+        let appWindows = windowList.filter { dict in
+            guard let ownerPID = dict[kCGWindowOwnerPID] as? Int32, ownerPID == app.processIdentifier else { return false }
+            guard let layer = dict[kCGWindowLayer] as? Int, layer == 0 else { return false }
+            return cgWindowBounds(dict) != nil
+        }
+        let match = preferredScreenshotWindow(from: appWindows, fallbackFrame: frame)
+        return match?[kCGWindowNumber] as? Int
     }
 
     private static func screenshotObservation(image: CGImage, frame: CGRect) -> ComputerUseScreenshotObservation {
