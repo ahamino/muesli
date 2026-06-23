@@ -3153,7 +3153,7 @@ final class MuesliController: NSObject {
 
     // MARK: - Folder Management
 
-    static func treeOrderedFolders(_ folders: [MeetingFolder], order: [Int64]) -> [MeetingFolder] {
+    nonisolated static func treeOrderedFolders(_ folders: [MeetingFolder], order: [Int64]) -> [MeetingFolder] {
         let byID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
         var childrenMap: [Int64?: [MeetingFolder]] = [:]
         for folder in folders {
