@@ -168,7 +168,9 @@ final class GoogleCalendarClient {
                 components.queryItems = [URLQueryItem(name: "syncToken", value: syncToken)]
             } else {
                 let now = Date()
-                guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: daysAhead) else { return }
+                guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: daysAhead) else {
+                    throw GoogleCalendarClientError.requestFailed("invalid upcoming events window")
+                }
                 components.queryItems = [
                     URLQueryItem(name: "timeMin", value: isoFormatter.string(from: now)),
                     URLQueryItem(name: "timeMax", value: isoFormatter.string(from: future)),
@@ -187,11 +189,10 @@ final class GoogleCalendarClient {
             if statusCode == 410 {
                 guard !isRetry else {
                     fputs("[google-cal] 410 on full re-fetch for \(calendarID), giving up\n", stderr)
-                    return
+                    throw GoogleCalendarClientError.requestFailed("events sync token expired during full re-fetch")
                 }
                 fputs("[google-cal] sync token expired for \(calendarID), performing full re-fetch\n", stderr)
                 syncTokens.removeValue(forKey: calendarID)
-                cachedEventsByCalendar.removeValue(forKey: calendarID)
                 return try await fetchEvents(forCalendarID: calendarID, daysAhead: daysAhead, isRetry: true)
             }
 
@@ -211,7 +212,7 @@ final class GoogleCalendarClient {
             }
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                break
+                throw GoogleCalendarClientError.requestFailed("events returned malformed JSON")
             }
 
             let isFullWindowFetch = pageToken == nil && syncTokens[calendarID] == nil
