@@ -103,7 +103,7 @@ final class ComputerUsePlannerRuntime {
         var unchangedObservationCounts: [String: Int] = [:]
         var invalidToolCallRepairCount = 0
         var screenshotOCRTextByID: [String: String] = [:]
-        var pendingUnverifiedTextWrite: PendingUnverifiedTextWrite?
+        var pendingUnverifiedTextWrites: [PendingUnverifiedTextWrite] = []
         let maxInvalidToolCallRepairs = 2
         // V1 keeps foreground activation, but state is scoped to a target app.
         // Later Codex-style work should replace this with background key-window tracking,
@@ -133,13 +133,12 @@ final class ComputerUsePlannerRuntime {
                 for: observation,
                 screenshotOCRTextByID: &screenshotOCRTextByID
             )
-            if let pending = pendingUnverifiedTextWrite,
-               unverifiedTextWriteEvidenceSource(
-                   pending,
-                   observation: observation,
-                   screenshotOCRTextByID: screenshotOCRTextByID
-               ) != nil {
-                pendingUnverifiedTextWrite = nil
+            pendingUnverifiedTextWrites.removeAll { pending in
+                unverifiedTextWriteEvidenceSource(
+                    pending,
+                    observation: observation,
+                    screenshotOCRTextByID: screenshotOCRTextByID
+                ) != nil
             }
             let request = ComputerUsePlannerRequest(
                 command: command,
@@ -217,12 +216,13 @@ final class ComputerUsePlannerRuntime {
             switch toolCall.tool {
             case .finish:
                 let message = toolCall.reason?.isEmpty == false ? toolCall.reason! : "Done"
-                if let pending = pendingUnverifiedTextWrite,
-                   unverifiedTextWriteEvidenceSource(
-                       pending,
-                       observation: observation,
-                       screenshotOCRTextByID: screenshotOCRTextByID
-                   ) == nil {
+                if let pending = pendingUnverifiedTextWrites.first(where: { pending in
+                    unverifiedTextWriteEvidenceSource(
+                        pending,
+                        observation: observation,
+                        screenshotOCRTextByID: screenshotOCRTextByID
+                    ) == nil
+                }) {
                     let blockedMessage = "Cannot finish yet: \(pending.toolSummary) from step \(pending.step) has not been confirmed in AX or OCR text. Call recognize_screenshot_text for the latest screenshot or inspect the visible screenshot; finish only after the requested text is visible, otherwise refocus or retry."
                     priorResults.append(ComputerUseToolOutcome(
                         step: step,
@@ -386,8 +386,8 @@ final class ComputerUsePlannerRuntime {
                         traceEvents.append(traceEvent(kind: "failed", title: "Repeated action stopped", body: blocked, status: "failed", step: step))
                         return .init(status: .failed, message: blocked, traceEvents: traceEvents)
                     }
-                    updatePendingUnverifiedTextWrite(
-                        &pendingUnverifiedTextWrite,
+                    updatePendingUnverifiedTextWrites(
+                        &pendingUnverifiedTextWrites,
                         toolCall: toolCall,
                         delta: delta,
                         before: beforeObservation,
@@ -629,15 +629,15 @@ final class ComputerUsePlannerRuntime {
         text: String
     ) -> String? {
         guard let sample = textVerificationSample(text) else { return nil }
-        if !observationTextCorpus(before).contains(sample),
-           observationTextCorpus(after).contains(sample) {
-            return "focused/visible AX text"
+        if !textWriteEvidenceCorpus(before).contains(sample),
+           textWriteEvidenceCorpus(after).contains(sample) {
+            return "focused text or selected text"
         }
         return nil
     }
 
-    private func updatePendingUnverifiedTextWrite(
-        _ pending: inout PendingUnverifiedTextWrite?,
+    private func updatePendingUnverifiedTextWrites(
+        _ pending: inout [PendingUnverifiedTextWrite],
         toolCall: ComputerUseToolCall,
         delta: ComputerUseStateDelta?,
         before: ComputerUseObservation,
@@ -645,19 +645,17 @@ final class ComputerUsePlannerRuntime {
     ) {
         guard isTextEntryTool(toolCall.tool), let text = toolCall.text else { return }
         if delta?.status == .changed {
-            pending = nil
             return
         }
         guard let sample = textVerificationSample(text) else {
-            pending = nil
             return
         }
-        pending = PendingUnverifiedTextWrite(
+        pending.append(PendingUnverifiedTextWrite(
             sample: sample,
             toolSummary: toolCall.summary,
             step: step,
             sampleWasVisibleBefore: observationTextCorpus(before).contains(sample)
-        )
+        ))
     }
 
     private func unverifiedTextWriteEvidenceSource(
@@ -668,8 +666,8 @@ final class ComputerUsePlannerRuntime {
         if pending.sampleWasVisibleBefore {
             return nil
         }
-        if observationTextCorpus(observation).contains(pending.sample) {
-            return "focused/visible AX text"
+        if textWriteEvidenceCorpus(observation).contains(pending.sample) {
+            return "focused text or selected text"
         }
         guard let screenshotID = observation.screenshot?.screenshotID,
               let ocrText = screenshotOCRTextByID[screenshotID] else {
@@ -699,6 +697,17 @@ final class ComputerUsePlannerRuntime {
             [observation.windowTitle, observation.selectedText ?? ""]
                 + focusedParts
                 + elementParts
+        ).joined(separator: " "))
+    }
+
+    private func textWriteEvidenceCorpus(_ observation: ComputerUseObservation) -> String {
+        let focusedParts: [String] = if let focused = observation.focusedElement {
+            [focused.value]
+        } else {
+            []
+        }
+        return ComputerUseElementCandidate.normalizedText((
+            [observation.selectedText ?? ""] + focusedParts
         ).joined(separator: " "))
     }
 

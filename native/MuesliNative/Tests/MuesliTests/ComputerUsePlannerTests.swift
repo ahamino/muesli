@@ -1131,6 +1131,102 @@ struct ComputerUsePlannerRuntimeTests {
         #expect(result.message == "Text insertion was not confirmed.")
     }
 
+    @Test("unrelated element text does not verify a text action")
+    @MainActor
+    func unrelatedElementTextDoesNotVerifyTextAction() async {
+        let requestedText = "hello from computer use"
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(screenshot: Self.screenshot())
+                }
+                return Self.observation(
+                    screenshot: Self.screenshot(),
+                    elementValue: requestedText
+                )
+            },
+            plan: { request in
+                switch request.step {
+                case 1:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .pasteText,
+                        text: requestedText
+                    ))
+                case 2:
+                    let outcome = request.priorOutcomes.last
+                    #expect(outcome?.verificationStatus == .unknown)
+                    #expect(outcome?.message.contains("AX did not expose newly confirmed requested text") == true)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+                default:
+                    #expect(request.priorOutcomes.last?.status == "unverified_text")
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "Text insertion was not confirmed."))
+                }
+            },
+            execute: { _, _ in .executed("Pasted text") }
+        )
+
+        let result = await runtime.run(command: "write hello")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.failed)
+        #expect(result.message == "Text insertion was not confirmed.")
+    }
+
+    @Test("later verified text write does not clear earlier pending write")
+    @MainActor
+    func laterVerifiedTextWriteDoesNotClearEarlierPendingWrite() async {
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount < 3 {
+                    return Self.observation(
+                        stateID: "state-\(observeCount)",
+                        windowTitle: "Window \(observeCount)",
+                        screenshot: Self.screenshot()
+                    )
+                }
+                return Self.observation(
+                    stateID: "state-\(observeCount)",
+                    windowTitle: "Window \(observeCount)",
+                    screenshot: Self.screenshot(),
+                    focusedValue: "second computer use text"
+                )
+            },
+            plan: { request in
+                switch request.step {
+                case 1:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .pasteText,
+                        text: "first computer use text"
+                    ))
+                case 2:
+                    #expect(request.priorOutcomes.last?.verificationStatus == .unknown)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .pasteText,
+                        text: "second computer use text"
+                    ))
+                case 3:
+                    #expect(request.priorOutcomes.last?.verificationStatus == .changed)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+                default:
+                    #expect(request.priorOutcomes.last?.status == "unverified_text")
+                    #expect(request.priorOutcomes.last?.message.contains("from step 1") == true)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "First write was not confirmed."))
+                }
+            },
+            execute: { _, _ in .executed("Pasted text") }
+        )
+
+        let result = await runtime.run(command: "write two snippets")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.failed)
+        #expect(result.message == "First write was not confirmed.")
+    }
+
     @Test("text action leaves screenshot completion decision to planner")
     @MainActor
     func textActionLeavesScreenshotCompletionDecisionToPlanner() async {

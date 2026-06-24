@@ -296,8 +296,9 @@ enum ComputerUseToolExecutor {
             return .unsupported("Unsupported key \(command.key)")
         }
 
+        let processID: pid_t?
         switch targetProcessID(toolCall: toolCall, app: targetApp.app, element: nil) {
-        case .success:
+        case .success(let resolvedProcessID):
             if let suppliedProcessID = toolCall.processID, suppliedProcessID > 0 {
                 let expectedProcessID = pid_t(suppliedProcessID)
                 guard let focusedProcessID = currentFocusedProcessID() else {
@@ -307,6 +308,7 @@ enum ComputerUseToolExecutor {
                     return .failed("Stale process_id \(suppliedProcessID); focused element pid is \(focusedProcessID). Refresh state before pressing keys.")
                 }
             }
+            processID = resolvedProcessID
         case .failure(let message):
             return .failed(message)
         }
@@ -315,8 +317,8 @@ enum ComputerUseToolExecutor {
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         keyDown?.flags = flags
         keyUp?.flags = flags
-        postKeyEvent(keyDown, processID: nil)
-        postKeyEvent(keyUp, processID: nil)
+        postKeyEvent(keyDown, processID: processID)
+        postKeyEvent(keyUp, processID: processID)
         return .executed("Pressed key")
     }
 
@@ -835,6 +837,9 @@ enum ComputerUseToolExecutor {
         guard focusedProcessID == targetProcessID else {
             return .failure("Focus moved to process \(focusedProcessID), not intended process \(targetProcessID). Refresh state before typing.")
         }
+        guard elementsAppearSame(element, focusedElement) else {
+            return .failure("Focus moved within the target process, but not to the intended element. Refresh state before typing.")
+        }
         return .success
     }
 
@@ -1262,8 +1267,6 @@ enum ComputerUseToolExecutor {
                 && abs(lhsRect.origin.y - rhsRect.origin.y) < 1
                 && abs(lhsRect.size.width - rhsRect.size.width) < 1
                 && abs(lhsRect.size.height - rhsRect.size.height) < 1
-        case (.none, .none):
-            return true
         default:
             return false
         }
@@ -1454,6 +1457,8 @@ enum ComputerUseToolExecutor {
             || canonical == "element"
             || canonical == "button"
             || canonical == "axbutton"
+            || canonical == "default button"
+            || canonical == "axdefaultbutton"
             || canonical == "group"
             || canonical == "axgroup"
             || canonical == "menu item"

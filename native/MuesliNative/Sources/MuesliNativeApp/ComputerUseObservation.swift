@@ -423,7 +423,7 @@ enum ComputerUseObservationCapture {
         let windowFrame = window.flatMap(rect) ?? targetWindowFrame
         let resolvedTargetWindowID = matchedTargetWindow == nil ? nil : target?.windowID
         let windowID = resolvedTargetWindowID ?? matchedWindowID(for: app, frame: windowFrame)
-        let screenshot = includeScreenshot ? captureScreenshot(for: app, targetWindowID: resolvedTargetWindowID, fallbackFrame: windowFrame) : nil
+        let screenshot = includeScreenshot ? captureScreenshot(for: app, targetWindowID: windowID, fallbackFrame: windowFrame) : nil
         registry.registerScreenshot(screenshot)
         let focusedElementSnapshot = focusedElementSnapshot(requiredPID: app.processIdentifier)
         let focusedElement = focusedElementSnapshot?.observation
