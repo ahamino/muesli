@@ -366,7 +366,7 @@ enum ComputerUseToolExecutor {
 
         let fallbackLabel = focusedElementLabel(element, fallback: toolCall.label)
         let actionContext = [fallbackLabel, toolCall.label, toolCall.reason].compactMap { $0 }.joined(separator: " ")
-        if isRiskyActionLabel(actionContext) || isLowInformationActionLabel(fallbackLabel) {
+        if requiresActivateFocusedConfirmation(element: element, label: fallbackLabel, actionContext: actionContext) {
             return .needsConfirmation("Confirm: activate focused \(fallbackLabel)")
         }
         if axBool(element, kAXEnabledAttribute) == false {
@@ -702,6 +702,9 @@ enum ComputerUseToolExecutor {
         }
         switch mode {
         case .keyboard:
+            if let failure = validateFocusedTextEntryFallbackTarget(targetElement, app: app, mode: mode) {
+                return failure
+            }
             PasteController.typeText(text, processID: processID)
             do {
                 try await Task.sleep(nanoseconds: 250_000_000)
@@ -711,7 +714,21 @@ enum ComputerUseToolExecutor {
                 return .failed(error.localizedDescription)
             }
         case .paste:
-            PasteController.paste(text: text, processID: processID)
+            if let failure = validateFocusedTextEntryFallbackTarget(targetElement, app: app, mode: mode) {
+                return failure
+            }
+            var pasteWasPosted = false
+            PasteController.paste(
+                text: text,
+                processID: processID,
+                beforePasteAction: {
+                    guard validateFocusedTextEntryFallbackTarget(targetElement, app: app, mode: mode) == nil else {
+                        return false
+                    }
+                    pasteWasPosted = true
+                    return true
+                }
+            )
             do {
                 try await Task.sleep(nanoseconds: 700_000_000)
             } catch is CancellationError {
@@ -719,8 +736,25 @@ enum ComputerUseToolExecutor {
             } catch {
                 return .failed(error.localizedDescription)
             }
+            guard pasteWasPosted else {
+                return .failed("No focused editable text target: focused element changed before paste_text posted. Refresh state and choose the editable field again.")
+            }
         }
         return .executed(mode.completedMessage)
+    }
+
+    private static func validateFocusedTextEntryFallbackTarget(
+        _ targetElement: AXUIElement,
+        app: NSRunningApplication?,
+        mode: TextEntryMode
+    ) -> ComputerUseExecutionResult? {
+        guard let focusedElement = focusedEditableTextTarget(requiredApp: app) else {
+            return .failed("No focused editable text target: focused element changed before \(mode.toolName) fallback posted. Refresh state and choose the editable field again.")
+        }
+        guard elementsAppearSame(targetElement, focusedElement) else {
+            return .failed("No focused editable text target: focused element no longer matches requested text target before \(mode.toolName) fallback posted. Refresh state and choose the editable field again.")
+        }
+        return nil
     }
 
     private enum AppPreparationResult {
@@ -1491,9 +1525,11 @@ enum ComputerUseToolExecutor {
             "buy",
             "cancel",
             "checkout",
+            "close",
             "confirm",
             "continue",
             "delete",
+            "don",
             "discard",
             "enable",
             "erase",
@@ -1504,9 +1540,13 @@ enum ComputerUseToolExecutor {
             "pay",
             "proceed",
             "purchase",
+            "quit",
             "remove",
+            "replace",
             "reset",
+            "save",
             "send",
+            "stop",
             "submit",
             "transfer",
             "unsubscribe",
@@ -1514,6 +1554,46 @@ enum ComputerUseToolExecutor {
         ]
         let words = Set(canonicalLabel(text).split(separator: " ").map(String.init))
         return !riskyWords.isDisjoint(with: words)
+    }
+
+    private static func requiresActivateFocusedConfirmation(
+        element: AXUIElement,
+        label: String,
+        actionContext: String
+    ) -> Bool {
+        if isRiskyActionLabel(actionContext) || isLowInformationActionLabel(label) {
+            return true
+        }
+        guard isDefaultDialogAction(element) else { return false }
+        return !isClearlySafeActionLabel(label)
+    }
+
+    private static func isDefaultDialogAction(_ element: AXUIElement) -> Bool {
+        let role = canonicalLabel(axString(element, kAXRoleAttribute))
+        let subrole = canonicalLabel(axString(element, kAXSubroleAttribute))
+        return role == "axdefaultbutton"
+            || subrole == "axdefaultbutton"
+            || subrole == "default button"
+            || subrole == "axdialog"
+    }
+
+    private static func isClearlySafeActionLabel(_ text: String) -> Bool {
+        let safeLabels: Set<String> = [
+            "back",
+            "collapse",
+            "copy",
+            "expand",
+            "find",
+            "next",
+            "pause",
+            "play",
+            "previous",
+            "search",
+            "show",
+            "view",
+        ]
+        let canonical = canonicalLabel(text)
+        return safeLabels.contains(canonical)
     }
 
     private static func clickCenter(of element: AXUIElement) -> Bool {

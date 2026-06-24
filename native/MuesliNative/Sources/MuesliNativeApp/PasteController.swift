@@ -42,6 +42,7 @@ enum PasteController {
         text: String,
         pasteboard: NSPasteboard = .general,
         processID: pid_t? = nil,
+        beforePasteAction: (() -> Bool)? = nil,
         simulatePasteAction: (() -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
@@ -54,6 +55,11 @@ enum PasteController {
         let pasteChangeCount = pasteboard.changeCount
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if beforePasteAction?() == false {
+                guard pasteboard.changeCount == pasteChangeCount else { return }
+                restoreClipboard(pasteboard, from: savedItems)
+                return
+            }
             if let simulatePasteAction {
                 simulatePasteAction()
             } else {

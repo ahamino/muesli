@@ -103,6 +103,26 @@ struct PasteControllerTests {
         #expect(restored == "user-copied-text")
     }
 
+    @Test("paste preflight can cancel before Cmd+V and restore clipboard")
+    func pastePreflightCanCancelBeforePosting() async throws {
+        let pasteboard = makePasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString("original", forType: .string)
+        var didPostPaste = false
+
+        PasteController.paste(
+            text: "dictated text",
+            pasteboard: pasteboard,
+            beforePasteAction: { false },
+            simulatePasteAction: { didPostPaste = true }
+        )
+
+        let restored = await waitForClipboardString(in: pasteboard, expected: "original")
+
+        #expect(restored == "original")
+        #expect(didPostPaste == false)
+    }
+
     @Test("paste restores empty clipboard state")
     func pasteRestoresEmptyClipboard() async throws {
         let pasteboard = makePasteboard()
