@@ -608,6 +608,18 @@ struct SettingsView: View {
                     ) { val in controller.updateConfig { $0.computerUsePlannerModel = val } }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("App control", controlWidth: meetingControlWidth) {
+                    settingsMenu(
+                        selection: appState.config.computerUseInteractionMode.label,
+                        options: ComputerUseInteractionMode.allCases.map(\.label)
+                    ) { label in
+                        guard let mode = ComputerUseInteractionMode.allCases.first(where: { $0.label == label }) else { return }
+                        controller.updateConfig { $0.computerUseInteractionMode = mode }
+                    }
+                    .frame(width: meetingControlWidth)
+                }
+                settingsDescription(appState.config.computerUseInteractionMode.description)
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Timeout", controlWidth: meetingControlWidth) {
                     Stepper(
                         value: Binding(

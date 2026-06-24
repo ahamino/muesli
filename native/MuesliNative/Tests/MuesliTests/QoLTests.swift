@@ -81,6 +81,28 @@ struct FloatingIndicatorVisibilityTests {
         let config = try JSONDecoder().decode(AppConfig.self, from: json.data(using: .utf8)!)
         #expect(config.enablePostProcessor == true)
     }
+
+    @Test("computer use app control defaults to direct")
+    func computerUseInteractionModeDefaultsToDirect() {
+        let config = AppConfig()
+        #expect(config.computerUseInteractionMode == .direct)
+    }
+
+    @Test("computer use app control persists through JSON round-trip")
+    func computerUseInteractionModeRoundTrip() throws {
+        var config = AppConfig()
+        config.computerUseInteractionMode = .quiet
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.computerUseInteractionMode == .quiet)
+    }
+
+    @Test("computer use app control decodes from snake_case JSON")
+    func computerUseInteractionModeSnakeCaseDecode() throws {
+        let json = #"{"computer_use_interaction_mode": "quiet"}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: json.data(using: .utf8)!)
+        #expect(config.computerUseInteractionMode == .quiet)
+    }
 }
 
 // MARK: - Unified indicator frame sizes

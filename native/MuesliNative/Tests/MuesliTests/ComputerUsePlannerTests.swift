@@ -85,6 +85,22 @@ struct ComputerUseToolRegistryTests {
         #expect(instructions.contains("Use finish only when the user's command is complete and successful"))
     }
 
+    @Test("planner guidance includes selected app control mode")
+    func plannerGuidanceIncludesSelectedAppControlMode() {
+        var quietConfig = AppConfig()
+        quietConfig.computerUseInteractionMode = .quiet
+        let quietInstructions = ComputerUsePlannerClient.instructions(for: quietConfig)
+        #expect(quietInstructions.contains("Current app-control preference: Work quietly"))
+        #expect(quietInstructions.contains("Keep the user's current app active"))
+        #expect(quietInstructions.contains("Avoid tools marked foreground activation allowed"))
+
+        var directConfig = AppConfig()
+        directConfig.computerUseInteractionMode = .direct
+        let directInstructions = ComputerUsePlannerClient.instructions(for: directConfig)
+        #expect(directInstructions.contains("Current app-control preference: Bring apps forward"))
+        #expect(directInstructions.contains("bring target apps forward"))
+    }
+
     @Test("mutating tool schemas expose process identity without window guard")
     func mutatingToolSchemasExposeProcessIdentityWithoutWindowGuard() {
         let tools = ComputerUseToolRegistry.nativeToolDefinitions()

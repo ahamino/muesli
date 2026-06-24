@@ -28,8 +28,15 @@ enum ComputerUsePlannerClient {
     static let defaultModel = "gpt-5.5"
 
     static var instructions: String {
+        instructions(for: AppConfig())
+    }
+
+    static func instructions(for config: AppConfig) -> String {
         """
     You are Muesli's computer-use planner. You do not execute actions. You must choose exactly one native tool call from the provided tool list.
+
+    Current app-control preference: \(config.computerUseInteractionMode.label).
+    \(interactionModeInstructions(for: config.computerUseInteractionMode))
 
     Rules:
     - Only use element_index or element_id values present in latest_window_state. Element references expire after each new get_app_state/get_window_state or refreshed state. They are snapshot addresses, not persistent focus handles.
@@ -69,13 +76,22 @@ enum ComputerUsePlannerClient {
     """
     }
 
+    private static func interactionModeInstructions(for mode: ComputerUseInteractionMode) -> String {
+        switch mode {
+        case .direct:
+            return "The user allows Muesli to bring target apps forward when a tool needs direct app control."
+        case .quiet:
+            return "Keep the user's current app active whenever the available tools support it. Prefer process/window-scoped observation and target-scoped actions. Avoid tools marked foreground activation allowed unless the requested task has no viable quiet path, and inspect the resulting state before continuing."
+        }
+    }
+
     static func planNextTool(
         request: ComputerUsePlannerRequest,
         config: AppConfig
     ) async throws -> ComputerUsePlannerResponse {
         do {
             return try await callWHAM(
-                systemPrompt: instructions,
+                systemPrompt: instructions(for: config),
                 userPrompt: requestPrompt(for: request),
                 imageDataURL: request.latestWindowState.screenshot?.imageDataURL,
                 model: plannerModel(for: config)

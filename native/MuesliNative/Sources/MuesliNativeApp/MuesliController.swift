@@ -5409,11 +5409,19 @@ final class MuesliController: NSObject {
             presentComputerUseTranscript(transcript)
             setState(.transcribing)
         }
+        let allowComputerUseTargetActivation = config.computerUseInteractionMode == .direct
         let runtime = ComputerUsePlannerRuntime(config: config) { [weak self] status in
             guard let self else { return }
             guard allowSharedStateUpdates,
                   self.isCurrentComputerUseCommandTask(id: commandTaskID) else { return }
             self.presentComputerUseFloatingStatus(status)
+        } observe: { registry, includeScreenshot, target in
+            ComputerUseObservationCapture.capture(
+                registry: registry,
+                includeScreenshot: includeScreenshot,
+                target: target,
+                allowTargetActivation: allowComputerUseTargetActivation
+            )
         }
 
         let result = await runtime.run(command: transcript)

@@ -707,6 +707,36 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+enum ComputerUseInteractionMode: String, Codable, CaseIterable {
+    case direct = "direct"
+    case quiet = "quiet"
+
+    var label: String {
+        switch self {
+        case .direct:
+            return "Bring apps forward"
+        case .quiet:
+            return "Work quietly"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .direct:
+            return "Muesli can show target apps directly while completing a command."
+        case .quiet:
+            return "Muesli keeps your current app active when the available controls support it."
+        }
+    }
+
+    static func resolved(_ rawValue: String?) -> ComputerUseInteractionMode {
+        guard let rawValue, let mode = ComputerUseInteractionMode(rawValue: rawValue) else {
+            return .direct
+        }
+        return mode
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var computerUseHotkey: HotkeyConfig = .computerUseDefault
@@ -717,6 +747,7 @@ struct AppConfig: Codable {
     var enableComputerUsePlanner: Bool = true
     var computerUsePlannerModel: String = ""
     var computerUseTimeoutSeconds: Int = 120
+    var computerUseInteractionMode: ComputerUseInteractionMode = .direct
     var sttBackend: String = BackendOption.whisper.backend
     var sttModel: String = BackendOption.whisper.model
     var dictationInputDeviceUID: String? = nil
@@ -803,6 +834,7 @@ struct AppConfig: Codable {
         case enableComputerUsePlanner = "enable_computer_use_planner"
         case computerUsePlannerModel = "computer_use_planner_model"
         case computerUseTimeoutSeconds = "computer_use_timeout_seconds"
+        case computerUseInteractionMode = "computer_use_interaction_mode"
         case sttBackend = "stt_backend"
         case sttModel = "stt_model"
         case dictationInputDeviceUID = "dictation_input_device_uid"
@@ -896,6 +928,9 @@ struct AppConfig: Codable {
         enableComputerUsePlanner = (try? c.decode(Bool.self, forKey: .enableComputerUsePlanner)) ?? defaults.enableComputerUsePlanner
         computerUsePlannerModel = (try? c.decode(String.self, forKey: .computerUsePlannerModel)) ?? defaults.computerUsePlannerModel
         computerUseTimeoutSeconds = (try? c.decode(Int.self, forKey: .computerUseTimeoutSeconds)) ?? defaults.computerUseTimeoutSeconds
+        computerUseInteractionMode =
+            (try? c.decode(ComputerUseInteractionMode.self, forKey: .computerUseInteractionMode))
+            ?? ComputerUseInteractionMode.resolved(try? c.decode(String.self, forKey: .computerUseInteractionMode))
         sttBackend = (try? c.decode(String.self, forKey: .sttBackend)) ?? defaults.sttBackend
         sttModel = (try? c.decode(String.self, forKey: .sttModel)) ?? defaults.sttModel
         dictationInputDeviceUID = try? c.decode(String.self, forKey: .dictationInputDeviceUID)

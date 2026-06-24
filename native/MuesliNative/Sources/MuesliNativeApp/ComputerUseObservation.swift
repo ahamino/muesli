@@ -400,12 +400,13 @@ enum ComputerUseObservationCapture {
         registry: ComputerUseElementRegistry,
         includeScreenshot: Bool = false,
         target: ComputerUseObservationTarget? = nil,
+        allowTargetActivation: Bool = true,
         maxCandidates: Int = 80,
         maxDepth: Int = 8
     ) -> ComputerUseObservation {
         registry.clear()
         let app = runningApplication(for: target) ?? NSWorkspace.shared.frontmostApplication
-        if target != nil, let app, !app.isActive {
+        if allowTargetActivation, target != nil, let app, !app.isActive {
             app.activate(options: [.activateAllWindows])
         }
         let appName = app?.localizedName ?? "Unknown"
