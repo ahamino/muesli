@@ -5262,31 +5262,42 @@ final class MuesliController: NSObject {
 
     private func finishComputerUseAudioStop(
         wavURL stoppedWavURL: URL?,
-        startedAt: Date
+        startedAt: Date,
+        allowSharedStateUpdates: Bool = true
     ) {
-        markComputerUseLatency("stop_finished")
+        if allowSharedStateUpdates {
+            markComputerUseLatency("stop_finished")
+        }
         guard let wavURL = stoppedWavURL else {
             fputs("[cua] stop without wav\n", stderr)
-            finishComputerUseLatencyTrace("stop_without_wav")
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
+            if allowSharedStateUpdates {
+                finishComputerUseLatencyTrace("stop_without_wav")
+                setState(.idle)
+                meetingMonitor.resumeAfterCooldown()
+            }
             return
         }
         let duration = max(Date().timeIntervalSince(startedAt), 0)
         if duration < 0.3 {
             fputs("[cua] discarded short recording\n", stderr)
             try? FileManager.default.removeItem(at: wavURL)
-            finishComputerUseLatencyTrace("short_recording")
-            setState(.idle)
-            meetingMonitor.resumeAfterCooldown()
+            if allowSharedStateUpdates {
+                finishComputerUseLatencyTrace("short_recording")
+                setState(.idle)
+                meetingMonitor.resumeAfterCooldown()
+            }
             return
         }
 
-        indicator.setTranscribingTitle("Parsing command", config: config)
-        setState(.transcribing)
-        finishComputerUseLatencyTrace("ready_for_transcription")
+        if allowSharedStateUpdates {
+            indicator.setTranscribingTitle("Parsing command", config: config)
+            setState(.transcribing)
+        }
+        if allowSharedStateUpdates {
+            finishComputerUseLatencyTrace("ready_for_transcription")
+        }
         let commandTaskID = UUID()
-        let task = Task { [weak self] in
+        let task = Task { [weak self, allowSharedStateUpdates] in
             guard let self else { return }
             defer {
                 try? FileManager.default.removeItem(at: wavURL)
@@ -5311,6 +5322,8 @@ final class MuesliController: NSObject {
                 guard !text.isEmpty else {
                     fputs("[cua] empty transcript, skipping planner\n", stderr)
                     await MainActor.run {
+                        guard allowSharedStateUpdates,
+                              self.isCurrentComputerUseCommandTask(id: commandTaskID) else { return }
                         self.clearComputerUseCommandTask(id: commandTaskID)
                         self.setState(.idle)
                         self.meetingMonitor.resumeAfterCooldown()
@@ -5331,11 +5344,14 @@ final class MuesliController: NSObject {
                 await self.handleComputerUseCommand(
                     transcript: text,
                     dictationID: dictationID,
-                    commandTaskID: commandTaskID
+                    commandTaskID: commandTaskID,
+                    allowSharedStateUpdates: allowSharedStateUpdates
                 )
             } catch is CancellationError {
                 fputs("[cua] command parsing cancelled\n", stderr)
                 await MainActor.run {
+                    guard allowSharedStateUpdates,
+                          self.isCurrentComputerUseCommandTask(id: commandTaskID) else { return }
                     self.clearComputerUseCommandTask(id: commandTaskID)
                     self.setState(.idle)
                     self.meetingMonitor.resumeAfterCooldown()
@@ -5343,6 +5359,8 @@ final class MuesliController: NSObject {
             } catch {
                 fputs("[cua] transcription failed: \(error)\n", stderr)
                 await MainActor.run {
+                    guard allowSharedStateUpdates,
+                          self.isCurrentComputerUseCommandTask(id: commandTaskID) else { return }
                     self.clearComputerUseCommandTask(id: commandTaskID)
                     self.setState(.idle)
                     self.indicator.showWarning("CUA command failed", icon: "!")
@@ -5350,9 +5368,11 @@ final class MuesliController: NSObject {
                 }
             }
         }
-        computerUseCommandTask?.cancel()
-        computerUseCommandTask = task
-        computerUseCommandTaskID = commandTaskID
+        if allowSharedStateUpdates {
+            computerUseCommandTask?.cancel()
+            computerUseCommandTask = task
+            computerUseCommandTaskID = commandTaskID
+        }
     }
 
     private var canPrepareComputerUseCommand: Bool {
@@ -5377,20 +5397,40 @@ final class MuesliController: NSObject {
     private func handleComputerUseCommand(
         transcript: String,
         dictationID: Int64?,
-        commandTaskID: UUID
+        commandTaskID: UUID,
+        allowSharedStateUpdates: Bool = true
     ) async {
-        resetComputerUseFloatingStatus()
-        presentComputerUseTranscript(transcript)
-        setState(.transcribing)
+        guard !allowSharedStateUpdates || isCurrentComputerUseCommandTask(id: commandTaskID) else {
+            fputs("[cua] skipping superseded command before planner\n", stderr)
+            return
+        }
+        if allowSharedStateUpdates {
+            resetComputerUseFloatingStatus()
+            presentComputerUseTranscript(transcript)
+            setState(.transcribing)
+        }
         let runtime = ComputerUsePlannerRuntime(config: config) { [weak self] status in
             guard let self else { return }
+            guard allowSharedStateUpdates,
+                  self.isCurrentComputerUseCommandTask(id: commandTaskID) else { return }
             self.presentComputerUseFloatingStatus(status)
         }
 
         let result = await runtime.run(command: transcript)
-        indicator.hideComputerUseCursor()
+        if allowSharedStateUpdates,
+           isCurrentComputerUseCommandTask(id: commandTaskID) {
+            indicator.hideComputerUseCursor()
+        }
         if result.status == .cancelled {
             persistComputerUseTrace(result, dictationID: dictationID)
+            guard allowSharedStateUpdates,
+                  isCurrentComputerUseCommandTask(id: commandTaskID) else {
+                TelemetryDeck.signal("computer_use.command_finished", parameters: [
+                    "status": "\(result.status)",
+                    "shared_state": "suppressed",
+                ])
+                return
+            }
             clearComputerUseCommandTask(id: commandTaskID)
             setState(.idle)
             meetingMonitor.resumeAfterCooldown()
@@ -5400,6 +5440,14 @@ final class MuesliController: NSObject {
             return
         }
         persistComputerUseTrace(result, dictationID: dictationID)
+        guard allowSharedStateUpdates,
+              isCurrentComputerUseCommandTask(id: commandTaskID) else {
+            TelemetryDeck.signal("computer_use.command_finished", parameters: [
+                "status": "\(result.status)",
+                "shared_state": "suppressed",
+            ])
+            return
+        }
         clearComputerUseCommandTask(id: commandTaskID)
         await waitForComputerUseFloatingStatusDwell()
         presentComputerUseRuntimeResult(result)
@@ -5407,6 +5455,11 @@ final class MuesliController: NSObject {
         TelemetryDeck.signal("computer_use.command_finished", parameters: [
             "status": "\(result.status)",
         ])
+    }
+
+    @MainActor
+    private func isCurrentComputerUseCommandTask(id commandTaskID: UUID) -> Bool {
+        self.computerUseCommandTaskID == commandTaskID
     }
 
     @MainActor
@@ -5888,12 +5941,15 @@ final class MuesliController: NSObject {
             }
             if let currentSessionID = computerUseAudioSessionManager.currentSessionID,
                currentSessionID != eventSessionID {
-                fputs("[cua] discarding superseded stopped wav while a newer CUA session is active\n", stderr)
+                fputs("[cua] processing superseded stopped wav without shared UI updates while a newer CUA session is active\n", stderr)
+                let startedAt = pendingComputerUseStopStartedAt ?? Date()
                 pendingComputerUseStopSessionID = nil
                 pendingComputerUseStopStartedAt = nil
-                if let wavURL {
-                    try? FileManager.default.removeItem(at: wavURL)
-                }
+                finishComputerUseAudioStop(
+                    wavURL: wavURL,
+                    startedAt: startedAt,
+                    allowSharedStateUpdates: false
+                )
                 break
             }
             let startedAt = pendingComputerUseStopStartedAt ?? computerUseCommandStartedAt ?? Date()

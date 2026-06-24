@@ -279,13 +279,6 @@ enum ComputerUseToolExecutor {
         _ toolCall: ComputerUseToolCall,
         registry: ComputerUseElementRegistry?
     ) async -> ComputerUseExecutionResult {
-        let targetApp = await prepareTextEntryApp(toolCall, shouldActivateNamedApp: !toolCall.canonicalBundleID.isEmpty || toolCall.appName?.isEmpty == false)
-        if case let .failure(message) = targetApp {
-            return .failed(message)
-        }
-        if case .cancelled = targetApp {
-            return .cancelled()
-        }
         let command = ComputerUseKeyCommand(
             modifiers: toolCall.modifiers ?? [],
             key: toolCall.key ?? ""
@@ -296,29 +289,24 @@ enum ComputerUseToolExecutor {
             return .unsupported("Unsupported key \(command.key)")
         }
 
-        let processID: pid_t?
-        switch targetProcessID(toolCall: toolCall, app: targetApp.app, element: nil) {
-        case .success(let resolvedProcessID):
-            if let suppliedProcessID = toolCall.processID, suppliedProcessID > 0 {
-                let expectedProcessID = pid_t(suppliedProcessID)
-                guard let focusedProcessID = currentFocusedProcessID() else {
-                    return .failed("Could not validate process_id \(suppliedProcessID) against current keyboard focus. Refresh state before pressing keys.")
-                }
-                guard focusedProcessID == expectedProcessID else {
-                    return .failed("Stale process_id \(suppliedProcessID); focused element pid is \(focusedProcessID). Refresh state before pressing keys.")
-                }
+        if let suppliedProcessID = toolCall.processID, suppliedProcessID > 0 {
+            let expectedProcessID = pid_t(suppliedProcessID)
+            guard let focusedProcessID = currentFocusedProcessID() else {
+                return .failed("Could not validate process_id \(suppliedProcessID) against current keyboard focus. Refresh state before pressing keys.")
             }
-            processID = resolvedProcessID
-        case .failure(let message):
-            return .failed(message)
+            guard focusedProcessID == expectedProcessID else {
+                return .failed("Stale process_id \(suppliedProcessID); focused element pid is \(focusedProcessID). Refresh state before pressing keys.")
+            }
+        } else if let mismatch = focusedAppHintMismatchMessage(toolCall) {
+            return .failed(mismatch)
         }
         let flags = cgFlags(for: command.modifiers)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         keyDown?.flags = flags
         keyUp?.flags = flags
-        postKeyEvent(keyDown, processID: processID)
-        postKeyEvent(keyUp, processID: processID)
+        postKeyEvent(keyDown, processID: nil)
+        postKeyEvent(keyUp, processID: nil)
         return .executed("Pressed key")
     }
 
@@ -575,6 +563,7 @@ enum ComputerUseToolExecutor {
         registry: ComputerUseElementRegistry?
     ) -> ElementTargetResult? {
         if let index = toolCall.elementIndex {
+            guard index > 0 else { return nil }
             guard let element = registry?.element(for: index) else {
                 return .failure("Stale or unknown element_index \(index). Run get_app_state again and use an element from the fresh snapshot.")
             }
@@ -674,11 +663,11 @@ enum ComputerUseToolExecutor {
         let targetElement: AXUIElement?
         if let explicitElement {
             guard isTextEntryTarget(explicitElement) else {
-                return .failed("Target element is not an editable text target. Refresh state and choose an editable field before using \(mode.toolName).")
+                return .failed("No focused editable text target: requested element is not an editable text target. Refresh state and choose an editable field before using \(mode.toolName).")
             }
             guard let focusedElement,
                   elementsAppearSame(explicitElement, focusedElement) else {
-                return .failed("Focused element no longer matches requested text target. Refresh state before using \(mode.toolName).")
+                return .failed("No focused editable text target: focused element no longer matches requested text target. Refresh state before using \(mode.toolName).")
             }
             targetElement = explicitElement
         } else {
@@ -1412,6 +1401,27 @@ enum ComputerUseToolExecutor {
 
     private static func currentFocusedProcessID() -> pid_t? {
         focusedUIElement(requiredApp: nil).flatMap { processID(of: $0) }
+    }
+
+    private static func focusedAppHintMismatchMessage(_ toolCall: ComputerUseToolCall) -> String? {
+        let targetName = textEntryAppName(toolCall)
+        guard !targetName.isEmpty else { return nil }
+        guard let focusedProcessID = currentFocusedProcessID(),
+              let focusedApp = runningApplication(processID: focusedProcessID) else {
+            return "Could not validate app target against current keyboard focus. Refresh state before pressing keys."
+        }
+        let expectedBundleID = toolCall.canonicalBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !expectedBundleID.isEmpty,
+           focusedApp.bundleIdentifier != expectedBundleID {
+            return "App target \(expectedBundleID) does not match current keyboard focus \(focusedApp.bundleIdentifier ?? "unknown"). Refresh state before pressing keys."
+        }
+        if toolCall.canonicalBundleID.isEmpty,
+           let appName = toolCall.appName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !appName.isEmpty,
+           canonicalAppName(focusedApp.localizedName ?? "") != canonicalAppName(appName) {
+            return "App target \(appName) does not match current keyboard focus \(focusedApp.localizedName ?? "unknown"). Refresh state before pressing keys."
+        }
+        return nil
     }
 
     private static func axBool(_ element: AXUIElement, _ attribute: String) -> Bool? {

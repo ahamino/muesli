@@ -46,6 +46,7 @@ final class ComputerUsePlannerRuntime {
         let toolSummary: String
         let step: Int
         let sampleWasVisibleBefore: Bool
+        let sampleWasInTextEvidenceBefore: Bool
         let preActionOCRText: String?
     }
 
@@ -673,6 +674,7 @@ final class ComputerUsePlannerRuntime {
             toolSummary: toolCall.summary,
             step: step,
             sampleWasVisibleBefore: observationTextCorpus(before).contains(sample),
+            sampleWasInTextEvidenceBefore: textWriteEvidenceCorpus(before).contains(sample),
             preActionOCRText: preActionOCRText
         ))
     }
@@ -682,7 +684,7 @@ final class ComputerUsePlannerRuntime {
         observation: ComputerUseObservation,
         screenshotOCRTextByID: [String: String]
     ) -> String? {
-        if !pending.sampleWasVisibleBefore,
+        if !pending.sampleWasInTextEvidenceBefore,
            textWriteEvidenceCorpus(observation).contains(pending.sample) {
             return "focused text or selected text"
         }
@@ -701,8 +703,9 @@ final class ComputerUsePlannerRuntime {
             }
             return "new screenshot OCR text"
         }
-        if !pending.sampleWasVisibleBefore {
-            return "screenshot OCR text not present in pre-action state"
+        if !pending.sampleWasInTextEvidenceBefore {
+            let source = pending.sampleWasVisibleBefore ? "screenshot OCR text not present in focused/selected pre-action evidence" : "screenshot OCR text not present in pre-action state"
+            return source
         }
         return nil
     }
@@ -859,9 +862,9 @@ final class ComputerUsePlannerRuntime {
 
     private func requiresMatchedWindow(for tool: ComputerUseToolName) -> Bool {
         switch tool {
-        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag:
+        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab:
             return true
-        case .launchApp, .listApps, .listWindows, .getAppState, .getWindowState, .recognizeScreenshotText, .listBrowserTabs, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab, .pageGetText, .pageQueryDOM, .finish, .fail:
+        case .launchApp, .listApps, .listWindows, .getAppState, .getWindowState, .recognizeScreenshotText, .listBrowserTabs, .pageGetText, .pageQueryDOM, .finish, .fail:
             return false
         }
     }
@@ -1120,7 +1123,10 @@ final class ComputerUsePlannerRuntime {
     }
 
     private func isTextFocusFailure(_ message: String) -> Bool {
-        message.lowercased().contains("no focused editable text target")
+        let lowered = message.lowercased()
+        return lowered.contains("no focused editable text target")
+            || lowered.contains("not an editable text target")
+            || lowered.contains("focused element no longer matches requested text target")
     }
 
     private func executionTraceBody(toolCall: ComputerUseToolCall, observation: ComputerUseObservation) -> String {

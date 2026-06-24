@@ -1096,16 +1096,16 @@ struct ComputerUsePlannerRuntimeTests {
         #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
     }
 
-    @Test("pre-existing visible text does not verify a text action")
+    @Test("pre-existing focused text does not verify a text action")
     @MainActor
-    func preExistingVisibleTextDoesNotVerifyTextAction() async {
+    func preExistingFocusedTextDoesNotVerifyTextAction() async {
         let requestedText = "hello from computer use"
         let runtime = ComputerUsePlannerRuntime(
             config: AppConfig(),
             observe: { _, _, _ in
                 Self.observation(
                     screenshot: Self.screenshot(),
-                    elementValue: requestedText
+                    focusedValue: requestedText
                 )
             },
             plan: { request in
@@ -1222,6 +1222,47 @@ struct ComputerUsePlannerRuntimeTests {
             recognizeScreenshotText: { screenshot in
                 screenshot?.screenshotID == "before" ? "" : requestedText
             }
+        )
+
+        let result = await runtime.run(command: "write hello")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.done)
+        #expect(result.message == "done")
+    }
+
+    @Test("post-action OCR can verify text that existed only in unrelated AX text")
+    @MainActor
+    func postActionOCRCanVerifyTextThatExistedOnlyInUnrelatedAXText() async {
+        let requestedText = "hello from computer use"
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                Self.observation(
+                    screenshot: Self.screenshot(id: "after"),
+                    elementValue: requestedText
+                )
+            },
+            plan: { request in
+                switch request.step {
+                case 1:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .pasteText,
+                        text: requestedText
+                    ))
+                case 2:
+                    #expect(request.priorOutcomes.last?.verificationStatus == .unchanged)
+                    #expect(request.priorOutcomes.last?.message.contains("AX did not expose newly confirmed requested text") == true)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "after"))
+                case 3:
+                    #expect(request.latestWindowState.screenshotOCRText == requestedText)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+                default:
+                    Issue.record("unexpected planner step \(request.step)")
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "Unexpected step."))
+                }
+            },
+            execute: { _, _ in .executed("Pasted text") },
+            recognizeScreenshotText: { _ in requestedText }
         )
 
         let result = await runtime.run(command: "write hello")
@@ -1372,6 +1413,56 @@ struct ComputerUsePlannerRuntimeTests {
 
         #expect(result.status == ComputerUsePlannerRuntimeResult.Status.failed)
         #expect(result.message == "Need matched window.")
+        #expect(executeCalls == 0)
+    }
+
+    @Test("target mismatch blocks active browser mutation")
+    @MainActor
+    func targetMismatchBlocksActiveBrowserMutation() async {
+        var executeCalls = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                Self.observation(
+                    appName: "Chrome",
+                    bundleID: "com.google.Chrome",
+                    windowTitle: "Fallback",
+                    screenshot: Self.screenshot(),
+                    targetMismatch: ComputerUseTargetMismatch(
+                        requestedWindowID: 111,
+                        actualWindowID: 222,
+                        message: "Requested window_id 111 could not be matched; this state fell back to focused window_id 222."
+                    )
+                )
+            },
+            plan: { request in
+                switch request.step {
+                case 1:
+                    #expect(request.latestWindowState.targetMismatch?.requestedWindowID == 111)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .navigateActiveBrowserTab,
+                        appBundleID: "com.google.Chrome",
+                        url: "https://example.com"
+                    ))
+                case 2:
+                    #expect(request.priorOutcomes.last?.status == "target_mismatch")
+                    #expect(request.priorOutcomes.last?.message.contains("Cannot run navigate_active_browser_tab") == true)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "Need matched browser window."))
+                default:
+                    Issue.record("unexpected planner step \(request.step)")
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "Unexpected step."))
+                }
+            },
+            execute: { _, _ in
+                executeCalls += 1
+                return .executed("Navigated")
+            }
+        )
+
+        let result = await runtime.run(command: "open example")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.failed)
+        #expect(result.message == "Need matched browser window.")
         #expect(executeCalls == 0)
     }
 
@@ -1777,7 +1868,7 @@ struct ComputerUsePlannerRuntimeTests {
             },
             execute: { toolCall, _ in
                 #expect(toolCall.tool == .pasteText)
-                return .failed("No focused editable text target. Click an editable note body, title, text field, or text area before using paste_text.")
+                return .failed("Focused element no longer matches requested text target. Refresh state before using paste_text.")
             }
         )
 
