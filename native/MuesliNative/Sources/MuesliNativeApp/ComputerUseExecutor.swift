@@ -567,13 +567,30 @@ enum ComputerUseToolExecutor {
             guard let element = registry?.element(for: index) else {
                 return .failure("Stale or unknown element_index \(index). Run get_app_state again and use an element from the fresh snapshot.")
             }
+            if let mismatch = processMismatchMessage(for: element, toolCall: toolCall) {
+                return .failure(mismatch)
+            }
             return .success(element)
         }
         if let elementID = toolCall.elementID?.trimmingCharacters(in: .whitespacesAndNewlines), !elementID.isEmpty {
             guard let element = registry?.element(for: elementID) else {
                 return .failure("Stale or unknown element_id \(elementID). Run get_app_state again and use an element from the fresh snapshot.")
             }
+            if let mismatch = processMismatchMessage(for: element, toolCall: toolCall) {
+                return .failure(mismatch)
+            }
             return .success(element)
+        }
+        return nil
+    }
+
+    private static func processMismatchMessage(for element: AXUIElement, toolCall: ComputerUseToolCall) -> String? {
+        guard let processID = toolCall.processID, processID > 0 else { return nil }
+        guard let elementProcessID = Self.processID(of: element) else {
+            return "Could not validate process_id \(processID) for element target. Refresh state before using this element."
+        }
+        guard elementProcessID == pid_t(processID) else {
+            return "Stale process_id \(processID); element target pid is \(elementProcessID). Refresh state before using this element."
         }
         return nil
     }
@@ -644,7 +661,10 @@ enum ComputerUseToolExecutor {
 
         let focusedElement = focusedEditableTextTarget(requiredApp: app)
         let targetElement: AXUIElement?
-        if let explicitElement, isTextEntryTarget(explicitElement) {
+        if let explicitElement,
+           isTextEntryTarget(explicitElement),
+           let focusedElement,
+           elementsAppearSame(explicitElement, focusedElement) {
             targetElement = explicitElement
         } else {
             targetElement = focusedElement
@@ -1209,6 +1229,26 @@ enum ComputerUseToolExecutor {
         return isTextEntryTarget(element) ? element : nil
     }
 
+    private static func elementsAppearSame(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+        if CFEqual(lhs, rhs) {
+            return true
+        }
+        guard processID(of: lhs) == processID(of: rhs),
+              axString(lhs, kAXRoleAttribute) == axString(rhs, kAXRoleAttribute)
+        else { return false }
+        switch (rect(of: lhs), rect(of: rhs)) {
+        case let (.some(lhsRect), .some(rhsRect)):
+            return abs(lhsRect.origin.x - rhsRect.origin.x) < 1
+                && abs(lhsRect.origin.y - rhsRect.origin.y) < 1
+                && abs(lhsRect.size.width - rhsRect.size.width) < 1
+                && abs(lhsRect.size.height - rhsRect.size.height) < 1
+        case (.none, .none):
+            return true
+        default:
+            return false
+        }
+    }
+
     private static func isTextEntryTarget(_ element: AXUIElement) -> Bool {
         isEditableTextElement(element) || isWebEditorSurface(element)
     }
@@ -1238,11 +1278,10 @@ enum ComputerUseToolExecutor {
 
     private static func isWebEditorSurface(_ element: AXUIElement) -> Bool {
         let role = axString(element, kAXRoleAttribute)
-        guard role == "AXWebArea" || role == "AXGroup" else { return false }
+        guard role == "AXWebArea" else { return false }
         let combined = [
             axString(element, kAXTitleAttribute),
             axString(element, kAXDescriptionAttribute),
-            axString(element, kAXValueAttribute),
             axString(element, kAXHelpAttribute),
         ].joined(separator: " ").lowercased()
         let editorTerms = [

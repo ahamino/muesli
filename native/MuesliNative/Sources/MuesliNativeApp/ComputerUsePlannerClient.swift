@@ -33,7 +33,7 @@ enum ComputerUsePlannerClient {
 
     Rules:
     - Only use element_index or element_id values present in latest_window_state. Element references expire after each new get_app_state/get_window_state or refreshed state. They are snapshot addresses, not persistent focus handles.
-    - Treat latest_window_state.process_id and latest_window_state.window_id as the observed target context. Include process_id/window_id on text, key, and element-scoped calls whenever the schema allows them, but do not treat window_id as a persistent handle; if the active window may have changed, get a fresh state before acting.
+    - Treat latest_window_state.process_id as the executable target process when a tool accepts it. Treat latest_window_state.window_id as observation/trace context only unless you are calling get_window_state/get_app_state. If the active window may have changed, get a fresh state before acting.
     - Never invent AppleScript, shell commands, code, URLs, or tools.
     - For app launch/navigation, use launch_app with the requested app name or app bundle id. Do not substitute another app because it is frontmost, visible, or present in examples.
     - After launch_app, Muesli will refresh the requested app's state automatically. If the next state is not the requested app, call get_window_state or get_app_state for that app before using fail.
@@ -51,7 +51,7 @@ enum ComputerUsePlannerClient {
     - For new or separate browser tasks, prefer open_new_browser_tab and then navigate_active_browser_tab. Use list_browser_tabs and activate_browser_tab only when the user asks to continue, find, or reuse an existing tab.
     - Browser DOM/page tools are optional accelerators. Use page_get_text/page_query_dom when useful, but do not depend on them as the control path.
     - If page_get_text, page_query_dom, or list_browser_tabs fails, is blocked by Chrome Apple Events JavaScript permission, returns insufficient content, or returns no tabs, immediately continue with get_window_state and visual screenshot actions. For browser pages, prefer click_point on visible targets over AX focus/activation loops; use AX only as a hint or for a clearly exposed native/editable control.
-    - For text entry, prefer target-scoped calls: include process_id/window_id, and include element_index/element_id when an editable target or web editor surface is visible in the latest state.
+    - For text entry, prefer target-scoped calls: include process_id, and include element_index/element_id when an editable target or web editor surface is visible in the latest state. Include window_id only for trace continuity; it is not an execution guard.
     - type_text focuses the requested element, tries AXSelectedText insertion, and falls back to targeted key events. Use it for Google Docs, browser text editors, and normal text fields.
     - paste_text uses the same target contract and may fall back to clipboard paste with restoration. Prefer it for Apple Notes and native rich-text editors when multi-word insertion by paste is likely more reliable.
     - Do not use fail only because a browser DOM/page tool failed. Use fail only after trying the available visual screenshot fallback path, or when the requested task is unsafe or truly unsupported.
