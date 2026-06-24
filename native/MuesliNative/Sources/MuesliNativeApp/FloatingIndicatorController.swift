@@ -124,6 +124,10 @@ final class FloatingIndicatorController: NSObject {
 
     var onStopToggleDictation: (() -> Void)?
 
+    var currentFrame: NSRect? {
+        panel?.frame
+    }
+
     func handleClick(atX x: CGFloat? = nil) {
         if state == .transcribing, isComputerUseCancellationAvailable {
             if x == nil || (x ?? .greatestFiniteMagnitude) < Self.computerUseCancelHitWidth {
