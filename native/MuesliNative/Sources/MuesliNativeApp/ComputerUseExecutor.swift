@@ -294,7 +294,13 @@ enum ComputerUseToolExecutor {
             return .unsupported("Unsupported key \(command.key)")
         }
 
-        let processID = targetProcessID(toolCall: toolCall, app: targetApp.app, element: nil)
+        let processID: pid_t?
+        switch targetProcessID(toolCall: toolCall, app: targetApp.app, element: nil) {
+        case .success(let resolvedProcessID):
+            processID = resolvedProcessID
+        case .failure(let message):
+            return .failed(message)
+        }
         let flags = cgFlags(for: command.modifiers)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
@@ -360,7 +366,8 @@ enum ComputerUseToolExecutor {
         }
 
         let fallbackLabel = focusedElementLabel(element, fallback: toolCall.label)
-        if isRiskyActionLabel([fallbackLabel, toolCall.label, toolCall.reason].compactMap { $0 }.joined(separator: " ")) {
+        let actionContext = [fallbackLabel, toolCall.label, toolCall.reason].compactMap { $0 }.joined(separator: " ")
+        if isRiskyActionLabel(actionContext) || isLowInformationActionLabel(fallbackLabel) {
             return .needsConfirmation("Confirm: activate focused \(fallbackLabel)")
         }
         if axBool(element, kAXEnabledAttribute) == false {
@@ -385,7 +392,13 @@ enum ComputerUseToolExecutor {
             let actions = (advertisedActions ?? []).isEmpty ? "none" : (advertisedActions ?? []).joined(separator: ", ")
             return .unsupported("Focused \(fallbackLabel) does not support AXPress and Enter fallback could not be created (actions: \(actions)).")
         }
-        let processID = targetProcessID(toolCall: toolCall, app: targetApp.app, element: element)
+        let processID: pid_t?
+        switch targetProcessID(toolCall: toolCall, app: targetApp.app, element: element) {
+        case .success(let resolvedProcessID):
+            processID = resolvedProcessID
+        case .failure(let message):
+            return .failed(message)
+        }
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         postKeyEvent(keyDown, processID: processID)
@@ -656,7 +669,13 @@ enum ComputerUseToolExecutor {
             }
         }
 
-        let processID = targetProcessID(toolCall: toolCall, app: app, element: targetElement)
+        let processID: pid_t?
+        switch targetProcessID(toolCall: toolCall, app: app, element: targetElement) {
+        case .success(let resolvedProcessID):
+            processID = resolvedProcessID
+        case .failure(let message):
+            return .failed(message)
+        }
         switch mode {
         case .keyboard:
             PasteController.typeText(text, processID: processID)
@@ -1275,17 +1294,39 @@ enum ComputerUseToolExecutor {
         toolCall: ComputerUseToolCall,
         app: NSRunningApplication?,
         element: AXUIElement?
-    ) -> pid_t? {
+    ) -> ProcessTargetResolution {
         if let processID = toolCall.processID, processID > 0 {
-            return pid_t(processID)
+            let suppliedProcessID = pid_t(processID)
+            if let app, app.processIdentifier != suppliedProcessID {
+                return .failure("Stale process_id \(processID); current target app pid is \(app.processIdentifier). Refresh state before sending text or key events.")
+            }
+            if let element,
+               let elementProcessID = Self.processID(of: element),
+               elementProcessID != suppliedProcessID {
+                return .failure("Stale process_id \(processID); target element pid is \(elementProcessID). Refresh state before sending text or key events.")
+            }
+            if app == nil, element == nil {
+                guard let focusedProcessID = currentFocusedProcessID() else {
+                    return .failure("Could not validate process_id \(processID). Refresh state before sending text or key events.")
+                }
+                if focusedProcessID != suppliedProcessID {
+                    return .failure("Stale process_id \(processID); focused element pid is \(focusedProcessID). Refresh state before sending text or key events.")
+                }
+            }
+            return .success(suppliedProcessID)
         }
         if let app {
-            return app.processIdentifier
+            return .success(app.processIdentifier)
         }
         if let element {
-            return processID(of: element)
+            return .success(processID(of: element))
         }
-        return nil
+        return .success(nil)
+    }
+
+    private enum ProcessTargetResolution {
+        case success(pid_t?)
+        case failure(String)
     }
 
     private static func postKeyEvent(_ event: CGEvent?, processID: pid_t?) {
@@ -1301,6 +1342,10 @@ enum ComputerUseToolExecutor {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success else { return nil }
         return pid
+    }
+
+    private static func currentFocusedProcessID() -> pid_t? {
+        focusedUIElement(requiredApp: nil).flatMap { processID(of: $0) }
     }
 
     private static func axBool(_ element: AXUIElement, _ attribute: String) -> Bool? {
@@ -1343,6 +1388,20 @@ enum ComputerUseToolExecutor {
             .joined(separator: " ")
         guard compact.count > 120 else { return compact }
         return "\(compact.prefix(117))..."
+    }
+
+    private static func isLowInformationActionLabel(_ text: String) -> Bool {
+        let canonical = canonicalLabel(text)
+        return canonical.isEmpty
+            || canonical == "element"
+            || canonical == "button"
+            || canonical == "axbutton"
+            || canonical == "group"
+            || canonical == "axgroup"
+            || canonical == "menu item"
+            || canonical == "axmenuitem"
+            || canonical == "unknown"
+            || canonical == "axunknown"
     }
 
     private static func isRiskyActionLabel(_ text: String) -> Bool {
