@@ -1026,25 +1026,36 @@ struct ComputerUsePlannerRuntimeTests {
     @Test("first unchanged action is planner feedback")
     @MainActor
     func firstUnchangedActionIsPlannerFeedback() async {
+        var observeCount = 0
         let runtime = ComputerUsePlannerRuntime(
             config: AppConfig(),
-            observe: { _, _, _ in Self.observation(screenshot: Self.screenshot()) },
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(screenshot: Self.screenshot(id: "before"))
+                }
+                return Self.observation(screenshot: Self.screenshot(id: "after"))
+            },
             plan: { request in
                 switch request.step {
                 case 1:
-                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: "hello"))
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "before"))
                 case 2:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: "hello"))
+                case 3:
                     let outcome = request.priorOutcomes.last
                     #expect(outcome?.verificationStatus == .unchanged)
                     #expect(outcome?.message.contains("Inspect the latest screenshot") == true)
-                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "s1"))
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "after"))
                 default:
                     #expect(request.latestWindowState.screenshotOCRText == "hello")
                     return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
                 }
             },
             execute: { _, _ in .executed("Pasted text") },
-            recognizeScreenshotText: { _ in "hello" }
+            recognizeScreenshotText: { screenshot in
+                screenshot?.screenshotID == "before" ? "" : "hello"
+            }
         )
 
         let result = await runtime.run(command: "write hello")
@@ -1114,6 +1125,47 @@ struct ComputerUsePlannerRuntimeTests {
                     #expect(request.priorOutcomes.last?.message.contains("Cannot finish yet") == true)
                     return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "s1"))
                 case 4:
+                    #expect(request.latestWindowState.screenshotOCRText == requestedText)
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
+                default:
+                    #expect(request.priorOutcomes.last?.status == "unverified_text")
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .fail, reason: "Text insertion was not confirmed."))
+                }
+            },
+            execute: { _, _ in .executed("Pasted text") },
+            recognizeScreenshotText: { _ in requestedText }
+        )
+
+        let result = await runtime.run(command: "write hello")
+
+        #expect(result.status == ComputerUsePlannerRuntimeResult.Status.failed)
+        #expect(result.message == "Text insertion was not confirmed.")
+    }
+
+    @Test("post-action OCR without pre-action OCR does not verify a text action")
+    @MainActor
+    func postActionOCRWithoutPreActionOCRDoesNotVerifyTextAction() async {
+        let requestedText = "hello from computer use"
+        var observeCount = 0
+        let runtime = ComputerUsePlannerRuntime(
+            config: AppConfig(),
+            observe: { _, _, _ in
+                observeCount += 1
+                if observeCount == 1 {
+                    return Self.observation(screenshot: Self.screenshot(id: "before"))
+                }
+                return Self.observation(screenshot: Self.screenshot(id: "after"))
+            },
+            plan: { request in
+                switch request.step {
+                case 1:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(
+                        tool: .pasteText,
+                        text: requestedText
+                    ))
+                case 2:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "after"))
+                case 3:
                     #expect(request.latestWindowState.screenshotOCRText == requestedText)
                     return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
                 default:
@@ -1241,24 +1293,26 @@ struct ComputerUsePlannerRuntimeTests {
             observe: { _, _, _ in
                 observeCount += 1
                 if observeCount == 1 {
-                    return Self.observation(stateID: "state-before", windowTitle: "Untitled", screenshot: Self.screenshot())
+                    return Self.observation(stateID: "state-before", windowTitle: "Untitled", screenshot: Self.screenshot(id: "before"))
                 }
-                return Self.observation(stateID: "state-after", windowTitle: "Untitled", screenshot: Self.screenshot())
+                return Self.observation(stateID: "state-after", windowTitle: "Untitled", screenshot: Self.screenshot(id: "after"))
             },
             plan: { request in
                 switch request.step {
                 case 1:
-                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: requestedText))
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "before"))
                 case 2:
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .pasteText, text: requestedText))
+                case 3:
                     let outcome = request.priorOutcomes.last
                     #expect(outcome?.verificationStatus == .unchanged)
                     #expect(outcome?.message.contains("AX did not expose newly confirmed requested text") == true)
                     #expect(outcome?.message.contains("Inspect the latest screenshot") == true)
                     return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .finish, reason: "done"))
-                case 3:
+                case 4:
                     #expect(request.priorOutcomes.last?.status == "unverified_text")
                     #expect(request.priorOutcomes.last?.message.contains("Cannot finish yet") == true)
-                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "s1"))
+                    return ComputerUsePlannerResponse(toolCall: ComputerUseToolCall(tool: .recognizeScreenshotText, screenshotID: "after"))
                 default:
                     #expect(request.latestWindowState.screenshotOCRText?.contains("Computer Use as the Future") == true)
                     #expect(request.latestWindowState.screenshotOCRText?.contains("Computer use is becoming") == true)
@@ -1266,7 +1320,9 @@ struct ComputerUsePlannerRuntimeTests {
                 }
             },
             execute: { _, _ in .executed("Pasted text") },
-            recognizeScreenshotText: { _ in requestedText }
+            recognizeScreenshotText: { screenshot in
+                screenshot?.screenshotID == "before" ? "" : requestedText
+            }
         )
 
         let result = await runtime.run(command: "write about computer use")
@@ -1751,9 +1807,9 @@ struct ComputerUsePlannerRuntimeTests {
         )
     }
 
-    static func screenshot() -> ComputerUseScreenshotObservation {
+    static func screenshot(id: String = "s1") -> ComputerUseScreenshotObservation {
         ComputerUseScreenshotObservation(
-            screenshotID: "s1",
+            screenshotID: id,
             width: 100,
             height: 80,
             windowFrame: ComputerUseRect(x: 0, y: 0, width: 100, height: 80),

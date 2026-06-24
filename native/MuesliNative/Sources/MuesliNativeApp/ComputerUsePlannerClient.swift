@@ -33,7 +33,7 @@ enum ComputerUsePlannerClient {
 
     Rules:
     - Only use element_index or element_id values present in latest_window_state. Element references expire after each new get_app_state/get_window_state or refreshed state. They are snapshot addresses, not persistent focus handles.
-    - Treat latest_window_state.process_id as the executable target process when a tool accepts it. Use latest_window_state.window_id with get_window_state to refresh that specific window when possible. For mutating tools, window_id is trace context unless the tool says otherwise.
+    - Treat latest_window_state.process_id as the executable target process when a tool accepts it. Mutating tools do not accept window_id; use get_window_state with window_id to refresh that specific window when possible before acting from the fresh state.
     - Never invent AppleScript, shell commands, code, URLs, or tools.
     - For app launch/navigation, use launch_app with the requested app name or app bundle id. Do not substitute another app because it is frontmost, visible, or present in examples.
     - After launch_app, Muesli will refresh the requested app's state automatically. If the next state is not the requested app, call get_window_state or get_app_state for that app before using fail.

@@ -46,6 +46,7 @@ final class ComputerUsePlannerRuntime {
         let toolSummary: String
         let step: Int
         let sampleWasVisibleBefore: Bool
+        let preActionOCRText: String?
     }
 
     init(
@@ -223,7 +224,7 @@ final class ComputerUsePlannerRuntime {
                         screenshotOCRTextByID: screenshotOCRTextByID
                     ) == nil
                 }) {
-                    let blockedMessage = "Cannot finish yet: \(pending.toolSummary) from step \(pending.step) has not been confirmed in AX or OCR text. Call recognize_screenshot_text for the latest screenshot or inspect the visible screenshot; finish only after the requested text is visible, otherwise refocus or retry."
+                    let blockedMessage = "Cannot finish yet: \(pending.toolSummary) from step \(pending.step) has not been confirmed in focused/selected text or before/after OCR text. Inspect the visible screenshot; if the requested text is not visibly complete, refocus or retry. For ambiguous text writes, use OCR before and after the write so stale visible text is not treated as new."
                     priorResults.append(ComputerUseToolOutcome(
                         step: step,
                         tool: .finish,
@@ -391,6 +392,7 @@ final class ComputerUsePlannerRuntime {
                         toolCall: toolCall,
                         delta: delta,
                         before: beforeObservation,
+                        screenshotOCRTextByID: screenshotOCRTextByID,
                         step: step
                     )
                 case .needsConfirmation:
@@ -641,6 +643,7 @@ final class ComputerUsePlannerRuntime {
         toolCall: ComputerUseToolCall,
         delta: ComputerUseStateDelta?,
         before: ComputerUseObservation,
+        screenshotOCRTextByID: [String: String],
         step: Int
     ) {
         guard isTextEntryTool(toolCall.tool), let text = toolCall.text else { return }
@@ -650,11 +653,13 @@ final class ComputerUsePlannerRuntime {
         guard let sample = textVerificationSample(text) else {
             return
         }
+        let preActionOCRText = before.screenshot.flatMap { screenshotOCRTextByID[$0.screenshotID] }
         pending.append(PendingUnverifiedTextWrite(
             sample: sample,
             toolSummary: toolCall.summary,
             step: step,
-            sampleWasVisibleBefore: observationTextCorpus(before).contains(sample)
+            sampleWasVisibleBefore: observationTextCorpus(before).contains(sample),
+            preActionOCRText: preActionOCRText
         ))
     }
 
@@ -674,7 +679,17 @@ final class ComputerUsePlannerRuntime {
             return nil
         }
         let normalizedOCR = ComputerUseElementCandidate.normalizedText(ocrText)
-        return normalizedOCR.contains(pending.sample) ? "screenshot OCR text" : nil
+        guard normalizedOCR.contains(pending.sample) else {
+            return nil
+        }
+        if let preActionOCRText = pending.preActionOCRText {
+            let normalizedPreActionOCR = ComputerUseElementCandidate.normalizedText(preActionOCRText)
+            guard !normalizedPreActionOCR.contains(pending.sample) else {
+                return nil
+            }
+            return "new screenshot OCR text"
+        }
+        return nil
     }
 
     private func textVerificationSample(_ text: String) -> String? {

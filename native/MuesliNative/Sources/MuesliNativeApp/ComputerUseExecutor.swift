@@ -672,10 +672,14 @@ enum ComputerUseToolExecutor {
 
         let focusedElement = focusedEditableTextTarget(requiredApp: app)
         let targetElement: AXUIElement?
-        if let explicitElement,
-           isTextEntryTarget(explicitElement),
-           let focusedElement,
-           elementsAppearSame(explicitElement, focusedElement) {
+        if let explicitElement {
+            guard isTextEntryTarget(explicitElement) else {
+                return .failed("Target element is not an editable text target. Refresh state and choose an editable field before using \(mode.toolName).")
+            }
+            guard let focusedElement,
+                  elementsAppearSame(explicitElement, focusedElement) else {
+                return .failed("Focused element no longer matches requested text target. Refresh state before using \(mode.toolName).")
+            }
             targetElement = explicitElement
         } else {
             targetElement = focusedElement
