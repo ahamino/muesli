@@ -1838,7 +1838,7 @@ final class MuesliController: NSObject {
         let disabledIDs = Set(config.disabledCalendarIDs)
         let dayCount = UpcomingMeetingsWindow.resolve(dayCount: config.upcomingMeetingsDayCount).dayCount
         var ekEvents = calendarMonitor.upcomingEvents(daysAhead: dayCount, disabledCalendarIDs: disabledIDs)
-        var canConfirmMissingCalendarEvents = !googleCalAuth.isAvailable
+        var canConfirmMissingGoogleEvents = false
 
         if googleCalAuth.isAuthenticated {
             do {
@@ -1846,19 +1846,16 @@ final class MuesliController: NSObject {
                     daysAhead: dayCount,
                     disabledCalendarIDs: disabledIDs
                 )
-                canConfirmMissingCalendarEvents = googleCalClient.lastUpcomingEventsFetchWasComplete
+                canConfirmMissingGoogleEvents = googleCalClient.lastUpcomingEventsFetchWasComplete
                 ekEvents = GoogleCalendarClient.mergeEvents(eventKit: ekEvents, google: googleEvents)
             } catch GoogleCalendarAuthError.notAuthenticated {
-                canConfirmMissingCalendarEvents = false
                 invalidateGoogleCalendarAuth()
                 fputs("[muesli-native] Google Calendar token invalid, signed out\n", stderr)
             } catch GoogleCalendarAuthError.refreshFailed(let message) {
-                canConfirmMissingCalendarEvents = false
                 fputs("[muesli-native] Google Calendar token refresh failed: \(message)\n", stderr)
             } catch GoogleCalendarClientError.staleRequest {
                 return
             } catch {
-                canConfirmMissingCalendarEvents = false
                 fputs("[muesli-native] Google Calendar fetch failed: \(error)\n", stderr)
             }
         }
@@ -1874,7 +1871,6 @@ final class MuesliController: NSObject {
         // Prune hidden IDs only when the widest supported window still cannot see the event.
         let currentEventIDs = Set(ekEvents.map(\.id))
         let sourceHints = config.hiddenCalendarEventSourceHints
-        let canConfirmMissingGoogleEvents = canConfirmMissingCalendarEvents
         let canConfirmMissingEventKitEvents = calendarMonitor.canConfirmMissingEvents
         let canPruneHiddenEvents = disabledIDs.isEmpty
         let staleIDs = UpcomingMeetingsWindow.staleHiddenEventIDs(
