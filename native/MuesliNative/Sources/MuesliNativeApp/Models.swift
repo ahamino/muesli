@@ -870,6 +870,7 @@ struct AppConfig: Codable {
     var maraudersMapAudioClip: String = "bbc_world_news"
     var maraudersMapCustomAudioPath: String?
     var hiddenCalendarEventIDs: [String] = []
+    var hiddenCalendarEventSourceHints: [String: String] = [:]
     var disabledCalendarIDs: [String] = []
     var enablePostProcessor: Bool = false
     var activePostProcessorId: String = PostProcessorOption.defaultOption.id
@@ -958,6 +959,7 @@ struct AppConfig: Codable {
         case maraudersMapAudioClip = "marauders_map_audio_clip"
         case maraudersMapCustomAudioPath = "marauders_map_custom_audio_path"
         case hiddenCalendarEventIDs = "hidden_calendar_event_ids"
+        case hiddenCalendarEventSourceHints = "hidden_calendar_event_source_hints"
         case disabledCalendarIDs = "disabled_calendar_ids"
         case enablePostProcessor = "enable_post_processor"
         case activePostProcessorId = "active_post_processor_id"
@@ -1082,6 +1084,10 @@ struct AppConfig: Codable {
         maraudersMapAudioClip = (try? c.decode(String.self, forKey: .maraudersMapAudioClip)) ?? defaults.maraudersMapAudioClip
         maraudersMapCustomAudioPath = try? c.decode(String.self, forKey: .maraudersMapCustomAudioPath)
         hiddenCalendarEventIDs = (try? c.decode([String].self, forKey: .hiddenCalendarEventIDs)) ?? defaults.hiddenCalendarEventIDs
+        hiddenCalendarEventSourceHints = (try? c.decode(
+            [String: String].self,
+            forKey: .hiddenCalendarEventSourceHints
+        )) ?? defaults.hiddenCalendarEventSourceHints
         disabledCalendarIDs = (try? c.decode([String].self, forKey: .disabledCalendarIDs)) ?? defaults.disabledCalendarIDs
         enablePostProcessor = (try? c.decode(Bool.self, forKey: .enablePostProcessor)) ?? defaults.enablePostProcessor
         activePostProcessorId = (try? c.decode(String.self, forKey: .activePostProcessorId)) ?? defaults.activePostProcessorId

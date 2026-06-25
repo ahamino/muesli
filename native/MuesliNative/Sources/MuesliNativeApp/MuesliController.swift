@@ -1871,17 +1871,35 @@ final class MuesliController: NSObject {
 
         // Prune hidden IDs only when the widest supported window still cannot see the event.
         let currentEventIDs = Set(ekEvents.map(\.id))
+        let sourceHints = config.hiddenCalendarEventSourceHints
+        let canConfirmMissingGoogleEvents = canConfirmMissingCalendarEvents
+        let canConfirmMissingEventKitEvents = calendarMonitor.canConfirmMissingEvents
+        let canPruneHiddenEvents = disabledIDs.isEmpty
         let staleIDs = UpcomingMeetingsWindow.staleHiddenEventIDs(
             hiddenIDs: appState.hiddenCalendarEventIDs,
             visibleEventIDs: currentEventIDs,
             dayCount: dayCount,
-            canConfirmMissingEvents: canConfirmMissingCalendarEvents &&
-                calendarMonitor.canConfirmMissingEvents &&
-                disabledIDs.isEmpty
+            canConfirmMissingEvents: canPruneHiddenEvents,
+            canConfirmMissingEventID: { eventID in
+                guard canPruneHiddenEvents else { return false }
+                switch sourceHints[eventID].flatMap(UnifiedCalendarEvent.CalendarSource.init(rawValue:)) {
+                case .some(.eventKit):
+                    return canConfirmMissingEventKitEvents
+                case .some(.googleCalendar):
+                    return canConfirmMissingGoogleEvents
+                case .none:
+                    return canConfirmMissingEventKitEvents && canConfirmMissingGoogleEvents
+                }
+            }
         )
         if !staleIDs.isEmpty {
             appState.hiddenCalendarEventIDs.subtract(staleIDs)
-            updateConfig { $0.hiddenCalendarEventIDs = self.appState.hiddenCalendarEventIDs.sorted() }
+            updateConfig {
+                $0.hiddenCalendarEventIDs = self.appState.hiddenCalendarEventIDs.sorted()
+                $0.hiddenCalendarEventSourceHints = $0.hiddenCalendarEventSourceHints.filter {
+                    !staleIDs.contains($0.key)
+                }
+            }
         }
 
         statusBarController?.updateMenuBarTitle()
@@ -3604,6 +3622,15 @@ final class MuesliController: NSObject {
     func hideCalendarEvent(_ eventID: String) {
         appState.hiddenCalendarEventIDs.insert(eventID)
         updateConfig { $0.hiddenCalendarEventIDs = self.appState.hiddenCalendarEventIDs.sorted() }
+        statusBarController?.refresh()
+    }
+
+    func hideCalendarEvent(_ event: UnifiedCalendarEvent) {
+        appState.hiddenCalendarEventIDs.insert(event.id)
+        updateConfig {
+            $0.hiddenCalendarEventIDs = self.appState.hiddenCalendarEventIDs.sorted()
+            $0.hiddenCalendarEventSourceHints[event.id] = event.source.rawValue
+        }
         statusBarController?.refresh()
     }
 

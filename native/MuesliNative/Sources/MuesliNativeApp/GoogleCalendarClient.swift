@@ -63,12 +63,19 @@ final class GoogleCalendarClient {
     private static let baseURL = "https://www.googleapis.com/calendar/v3"
     private static let primaryCalendarID = "primary"
 
+    private struct EventWindowScope: Equatable {
+        let dayCount: Int
+        let startOfDay: Date
+    }
+
     /// Stored sync token per calendar from last full fetch — subsequent requests
     /// return only changes for that calendar.
     private var syncTokens: [String: String] = [:]
     /// Cached events keyed by calendar ID, then by event ID. A 410 (sync token
     /// expired) for one calendar invalidates only that calendar's cache.
     private var cachedEventsByCalendar: [String: [String: UnifiedCalendarEvent]] = [:]
+    /// Window/day represented by each per-calendar event cache.
+    private var cachedEventScopesByCalendar: [String: EventWindowScope] = [:]
     /// The event window used for the current sync tokens. Google incremental
     /// sync does not include a new time range, so changing the selected window
     /// requires a full re-fetch.
@@ -97,6 +104,10 @@ final class GoogleCalendarClient {
 
         let resolvedDayCount = UpcomingMeetingsWindow.resolve(dayCount: daysAhead).dayCount
         let now = Date()
+        let windowScope = EventWindowScope(
+            dayCount: resolvedDayCount,
+            startOfDay: Calendar.current.startOfDay(for: now)
+        )
         resetEventSyncIfNeededForWindow(daysAhead: resolvedDayCount, now: now)
 
         guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: resolvedDayCount) else {
@@ -129,12 +140,17 @@ final class GoogleCalendarClient {
         let calendarIDsToRemove = cachedEventsByCalendar.keys.filter { !keepIDs.contains($0) }
         for calID in calendarIDsToRemove {
             cachedEventsByCalendar.removeValue(forKey: calID)
+            cachedEventScopesByCalendar.removeValue(forKey: calID)
             syncTokens.removeValue(forKey: calID)
         }
 
         for calendar in enabled {
             do {
-                try await fetchEvents(forCalendarID: calendar.id, daysAhead: resolvedDayCount)
+                try await fetchEvents(
+                    forCalendarID: calendar.id,
+                    daysAhead: resolvedDayCount,
+                    windowScope: windowScope
+                )
             } catch let authError as GoogleCalendarAuthError {
                 throw authError
             } catch {
@@ -143,7 +159,9 @@ final class GoogleCalendarClient {
             }
         }
 
-        let merged = cachedEventsByCalendar.values
+        let merged = cachedEventsByCalendar
+            .filter { cachedEventScopesByCalendar[$0.key] == windowScope }
+            .values
             .flatMap { $0.values }
             .filter { $0.endDate > now && $0.startDate < future }
         return merged.sorted { $0.startDate < $1.startDate }
@@ -152,7 +170,12 @@ final class GoogleCalendarClient {
     /// Fetch events for a single calendar, populating `cachedEventsByCalendar[calendarID]`.
     /// Uses the per-calendar sync token if present; falls back to a windowed query otherwise.
     /// Handles pagination, 401 refresh, and 410 sync-token expiry per calendar.
-    private func fetchEvents(forCalendarID calendarID: String, daysAhead: Int, isRetry: Bool = false) async throws {
+    private func fetchEvents(
+        forCalendarID calendarID: String,
+        daysAhead: Int,
+        windowScope: EventWindowScope,
+        isRetry: Bool = false
+    ) async throws {
         var token = try await auth.validAccessToken()
         let isoFormatter = Self.isoFormatter
 
@@ -197,7 +220,13 @@ final class GoogleCalendarClient {
                 }
                 fputs("[google-cal] sync token expired for \(calendarID), performing full re-fetch\n", stderr)
                 syncTokens.removeValue(forKey: calendarID)
-                return try await fetchEvents(forCalendarID: calendarID, daysAhead: daysAhead, isRetry: true)
+                cachedEventScopesByCalendar.removeValue(forKey: calendarID)
+                return try await fetchEvents(
+                    forCalendarID: calendarID,
+                    daysAhead: daysAhead,
+                    windowScope: windowScope,
+                    isRetry: true
+                )
             }
 
             if statusCode == 401 && !tokenRetried {
@@ -239,6 +268,7 @@ final class GoogleCalendarClient {
                     syncTokens[calendarID] = newSyncToken
                 }
                 cachedEventsByCalendar[calendarID] = bucket
+                cachedEventScopesByCalendar[calendarID] = windowScope
             }
         } while pageToken != nil
     }
@@ -323,6 +353,7 @@ final class GoogleCalendarClient {
     func resetSync() {
         syncTokens.removeAll()
         cachedEventsByCalendar.removeAll()
+        cachedEventScopesByCalendar.removeAll()
         cachedEventWindowDayCount = nil
         cachedEventWindowStartOfDay = nil
         cachedCalendarList.removeAll()

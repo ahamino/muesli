@@ -46,9 +46,10 @@ enum UpcomingMeetingsWindow: Int, CaseIterable, Identifiable {
         hiddenIDs: Set<String>,
         visibleEventIDs: Set<String>,
         dayCount: Int,
-        canConfirmMissingEvents: Bool = true
+        canConfirmMissingEvents: Bool = true,
+        canConfirmMissingEventID: ((String) -> Bool)? = nil
     ) -> Set<String> {
-        guard canConfirmMissingEvents else {
+        guard canConfirmMissingEvents || canConfirmMissingEventID != nil else {
             return []
         }
 
@@ -57,6 +58,9 @@ enum UpcomingMeetingsWindow: Int, CaseIterable, Identifiable {
             return []
         }
 
-        return hiddenIDs.subtracting(visibleEventIDs)
+        return hiddenIDs.filter { hiddenID in
+            guard !visibleEventIDs.contains(hiddenID) else { return false }
+            return canConfirmMissingEventID?(hiddenID) ?? canConfirmMissingEvents
+        }
     }
 }
