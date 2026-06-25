@@ -46,6 +46,7 @@ final class ComputerUsePlannerRuntime {
         let toolSummary: String
         let step: Int
         let sampleWasInTextEvidenceBefore: Bool
+        let sampleWasVisibleBefore: Bool
         let preActionOCRText: String?
     }
 
@@ -105,7 +106,6 @@ final class ComputerUsePlannerRuntime {
         var invalidToolCallRepairCount = 0
         var screenshotOCRTextByID: [String: String] = [:]
         var pendingUnverifiedTextWrites: [PendingUnverifiedTextWrite] = []
-        var acknowledgedUnverifiedTextWriteSteps: Set<Int> = []
         let maxInvalidToolCallRepairs = 2
         // V1 keeps foreground activation, but state is scoped to a target app.
         // Later Codex-style work should replace this with background key-window tracking,
@@ -238,10 +238,8 @@ final class ComputerUsePlannerRuntime {
                         observation: observation,
                         screenshotOCRTextByID: screenshotOCRTextByID
                     ) == nil
-                        && !acknowledgedUnverifiedTextWriteSteps.contains(pending.step)
                 }) {
-                    acknowledgedUnverifiedTextWriteSteps.insert(pending.step)
-                    let blockedMessage = "Text write is unverified: \(pending.toolSummary) from step \(pending.step) was not confirmed in focused/selected text or a clean model-requested OCR delta. Inspect the visible screenshot, call recognize_screenshot_text with a fresh before/after baseline if useful, refocus/retry if the text is incomplete, or finish again only if the visible screen clearly satisfies the user's request."
+                    let blockedMessage = "Text write is unverified: \(pending.toolSummary) from step \(pending.step) was not confirmed in focused/selected text or model-requested OCR evidence. Inspect the visible screenshot, call recognize_screenshot_text on the latest screenshot if useful, refocus/retry if the text is incomplete, or use fail(reason) if the write cannot be confirmed."
                     priorResults.append(ComputerUseToolOutcome(
                         step: step,
                         tool: .finish,
@@ -676,6 +674,7 @@ final class ComputerUsePlannerRuntime {
             toolSummary: toolCall.summary,
             step: step,
             sampleWasInTextEvidenceBefore: textWriteEvidenceCorpus(before).contains(sample),
+            sampleWasVisibleBefore: observationTextCorpus(before).contains(sample),
             preActionOCRText: preActionOCRText
         ))
     }
@@ -704,7 +703,10 @@ final class ComputerUsePlannerRuntime {
             }
             return "new screenshot OCR text"
         }
-        return nil
+        guard !pending.sampleWasVisibleBefore else {
+            return nil
+        }
+        return "screenshot OCR text not present in pre-action visible evidence"
     }
 
     private func textVerificationSample(_ text: String) -> String? {
@@ -854,14 +856,14 @@ final class ComputerUsePlannerRuntime {
             return nil
         }
         let actual = mismatch.actualWindowID.map { "focused window_id \($0)" } ?? "the focused window without a stable window_id"
-        return "Cannot run \(toolCall.tool.rawValue): latest_window_state.target_mismatch says requested window_id \(mismatch.requestedWindowID.map(String.init) ?? "unknown") was not matched and state fell back to \(actual). Re-orient with list_windows/get_window_state for the intended or actual visible window before mutating."
+        return "Cannot run \(toolCall.tool.rawValue): latest_window_state.target_mismatch says requested window_id \(mismatch.requestedWindowID.map(String.init) ?? "unknown") was not matched and state fell back to \(actual). Re-orient with list_windows/get_window_state for the intended or actual visible window before acting or finishing."
     }
 
     private func requiresMatchedWindow(for tool: ComputerUseToolName) -> Bool {
         switch tool {
-        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab:
+        case .moveCursor, .click, .clickElement, .clickPoint, .focusElement, .activateFocused, .performSecondaryAction, .setValue, .typeText, .pasteText, .pressKey, .hotkey, .scroll, .drag, .activateBrowserTab, .openNewBrowserTab, .navigateURL, .navigateActiveBrowserTab, .finish:
             return true
-        case .launchApp, .listApps, .listWindows, .getAppState, .getWindowState, .recognizeScreenshotText, .listBrowserTabs, .pageGetText, .pageQueryDOM, .finish, .fail:
+        case .launchApp, .listApps, .listWindows, .getAppState, .getWindowState, .recognizeScreenshotText, .listBrowserTabs, .pageGetText, .pageQueryDOM, .fail:
             return false
         }
     }
@@ -1096,7 +1098,7 @@ final class ComputerUsePlannerRuntime {
             return "\(message). Continue with get_window_state and visual screenshot actions. For browser pages, prefer click_point on visible targets, plus press_key/hotkey, type_text/paste_text, and scroll. Treat AX candidates as optional hints; avoid repeated focus_element/activate_focused cycles on generic web areas, action menus, or search results. Do not retry browser page tools unless the user grants Chrome Apple Events JavaScript permission."
         }
         if (toolCall.tool == .typeText || toolCall.tool == .pasteText), isTextFocusFailure(message) {
-            return "\(message). Continue with get_window_state/get_app_state, then retry text entry with process_id plus element_index or element_id for the editable field, web editor, note body, or document editing area. Use get_window_state with window_id only to refresh the intended target before mutating. Prefer type_text for browser editors and paste_text for Apple Notes/native rich text. Do not repeat text entry until the target changes."
+            return "\(message). Continue with get_window_state/get_app_state, then retry text entry with process_id, window_id, and element_index or element_id for the editable field, web editor, note body, or document editing area. Prefer type_text for browser editors and paste_text for Apple Notes/native rich text. Do not repeat text entry until the target changes."
         }
         return nil
     }

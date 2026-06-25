@@ -233,6 +233,29 @@ enum ComputerUseToolExecutor {
         }
     }
 
+    private static func matchedWindowID(processID: pid_t, frame: CGRect) -> Int? {
+        let matchedWindow = windowInfos(appBundleID: "")
+            .filter { $0.processID == Int(processID) }
+            .first { info in
+                guard let candidateFrame = info.frame else { return false }
+                return framesApproximatelyMatch(CGRect(
+                    x: candidateFrame.x,
+                    y: candidateFrame.y,
+                    width: candidateFrame.width,
+                    height: candidateFrame.height
+                ), frame)
+            }
+        return matchedWindow?.windowID
+    }
+
+    private static func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        let tolerance: CGFloat = 8
+        return abs(lhs.origin.x - rhs.origin.x) <= tolerance
+            && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+            && abs(lhs.size.width - rhs.size.width) <= tolerance
+            && abs(lhs.size.height - rhs.size.height) <= tolerance
+    }
+
     private static func openApp(named rawName: String) async -> ComputerUseExecutionResult {
         let name = cleanedName(rawName)
         do {
@@ -289,6 +312,7 @@ enum ComputerUseToolExecutor {
             return .unsupported("Unsupported key \(command.key)")
         }
 
+        let resolvedProcessID: pid_t?
         if let suppliedProcessID = toolCall.processID, suppliedProcessID > 0 {
             let expectedProcessID = pid_t(suppliedProcessID)
             guard let focusedProcessID = currentFocusedProcessID() else {
@@ -297,16 +321,19 @@ enum ComputerUseToolExecutor {
             guard focusedProcessID == expectedProcessID else {
                 return .failed("Stale process_id \(suppliedProcessID); focused element pid is \(focusedProcessID). Refresh state before pressing keys.")
             }
+            resolvedProcessID = expectedProcessID
         } else if let mismatch = focusedAppHintMismatchMessage(toolCall) {
             return .failed(mismatch)
+        } else {
+            resolvedProcessID = nil
         }
         let flags = cgFlags(for: command.modifiers)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         keyDown?.flags = flags
         keyUp?.flags = flags
-        postKeyEvent(keyDown, processID: nil)
-        postKeyEvent(keyUp, processID: nil)
+        postKeyEvent(keyDown, processID: resolvedProcessID)
+        postKeyEvent(keyUp, processID: resolvedProcessID)
         return .executed("Pressed key")
     }
 
@@ -334,7 +361,7 @@ enum ComputerUseToolExecutor {
         case .success(let resolved):
             element = resolved
         }
-        switch await focusElement(element, label: toolCall.label ?? elementTargetLabel(toolCall)) {
+        switch await focusElement(element, label: toolCall.label ?? elementTargetLabel(toolCall), allowClickFallback: true) {
         case .success:
             return .executed("Focused \(elementTargetLabel(toolCall))")
         case .failure(let message):
@@ -570,6 +597,9 @@ enum ComputerUseToolExecutor {
             if let mismatch = processMismatchMessage(for: element, toolCall: toolCall) {
                 return .failure(mismatch)
             }
+            if let mismatch = windowMismatchMessage(for: element, toolCall: toolCall) {
+                return .failure(mismatch)
+            }
             return .success(element)
         }
         if let elementID = toolCall.elementID?.trimmingCharacters(in: .whitespacesAndNewlines), !elementID.isEmpty {
@@ -577,6 +607,9 @@ enum ComputerUseToolExecutor {
                 return .failure("Stale or unknown element_id \(elementID). Run get_app_state again and use an element from the fresh snapshot.")
             }
             if let mismatch = processMismatchMessage(for: element, toolCall: toolCall) {
+                return .failure(mismatch)
+            }
+            if let mismatch = windowMismatchMessage(for: element, toolCall: toolCall) {
                 return .failure(mismatch)
             }
             return .success(element)
@@ -591,6 +624,24 @@ enum ComputerUseToolExecutor {
         }
         guard elementProcessID == pid_t(processID) else {
             return "Stale process_id \(processID); element target pid is \(elementProcessID). Refresh state before using this element."
+        }
+        return nil
+    }
+
+    private static func windowMismatchMessage(for element: AXUIElement, toolCall: ComputerUseToolCall) -> String? {
+        guard let requestedWindowID = toolCall.windowID, requestedWindowID > 0 else { return nil }
+        guard let elementProcessID = Self.processID(of: element) else {
+            return "Could not validate window_id \(requestedWindowID) for element target because the element process is unavailable. Refresh state before using this element."
+        }
+        guard let windowElement = containingWindow(of: element),
+              let windowFrame = rect(of: windowElement) else {
+            return "Could not validate window_id \(requestedWindowID) for element target because its containing window is unavailable. Refresh state before using this element."
+        }
+        guard let matchedWindowID = matchedWindowID(processID: elementProcessID, frame: windowFrame) else {
+            return "Could not validate window_id \(requestedWindowID) for element target. Refresh state before using this element."
+        }
+        guard matchedWindowID == requestedWindowID else {
+            return "Stale window_id \(requestedWindowID); element target is in window_id \(matchedWindowID). Refresh state before using this element."
         }
         return nil
     }
@@ -676,6 +727,9 @@ enum ComputerUseToolExecutor {
         guard let targetElement, isTextEntryTarget(targetElement) else {
             let target = textEntryTargetDescription(app: app, toolCall: toolCall)
             return .failed("No focused editable text target\(target). Use element_index/element_id from the latest get_window_state for the editable field, note body, web editor, or document editing area before using \(mode.toolName).")
+        }
+        if let mismatch = windowMismatchMessage(for: targetElement, toolCall: toolCall) {
+            return .failed(mismatch)
         }
 
         let text = toolCall.text ?? ""
@@ -837,16 +891,18 @@ enum ComputerUseToolExecutor {
         }
         guard let element else { return nil }
 
-        return await focusElement(element, label: toolCall.label)
+        return await focusElement(element, label: toolCall.label, allowClickFallback: true)
     }
 
-    private static func focusElement(_ element: AXUIElement, label: String?) async -> ElementFocusResult {
+    private static func focusElement(_ element: AXUIElement, label: String?, allowClickFallback: Bool) async -> ElementFocusResult {
         let targetProcessID = processID(of: element)
         _ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, true as CFTypeRef)
         if let rect = rect(of: element) {
             ComputerUseCursorOverlay.shared.show(at: CGPoint(x: rect.midX, y: rect.midY), label: label)
         }
-        _ = clickCenter(of: element)
+        if allowClickFallback, isTextEntryTarget(element) {
+            _ = clickCenter(of: element)
+        }
         do {
             try await Task.sleep(nanoseconds: 250_000_000)
         } catch is CancellationError {
@@ -1194,6 +1250,32 @@ enum ComputerUseToolExecutor {
               CFGetTypeID(element) == AXUIElementGetTypeID()
         else { return nil }
         return (element as! AXUIElement)
+    }
+
+    private static func containingWindow(of element: AXUIElement) -> AXUIElement? {
+        if let directWindow = axElement(element, kAXWindowAttribute) {
+            return directWindow
+        }
+        var current = element
+        for _ in 0..<12 {
+            if axString(current, kAXRoleAttribute) == (kAXWindowRole as String) {
+                return current
+            }
+            guard let parent = axElement(current, kAXParentAttribute) else {
+                return nil
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    private static func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let raw = value,
+              CFGetTypeID(raw) == AXUIElementGetTypeID()
+        else { return nil }
+        return (raw as! AXUIElement)
     }
 
     private static func findElement(

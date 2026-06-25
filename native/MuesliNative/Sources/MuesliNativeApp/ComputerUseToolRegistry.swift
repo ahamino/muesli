@@ -100,8 +100,9 @@ enum ComputerUseToolRegistry {
             "y": .number("Screenshot pixel y coordinate."),
             "label": .string("Human target label for live feedback and trace."),
         ], risk: "visual feedback only"),
-        definition(.clickElement, "Click a reliable AX element from the latest get_app_state/get_window_state by element_index or element_id. Best for native macOS controls, dialogs, menus, and clearly exposed standard controls. For rich browser/web/canvas UIs such as YouTube, Docs, Sheets, and X/Twitter, prefer click_point on the visible screenshot target. This mutating tool does not accept window_id; use get_window_state with window_id to refresh the intended target first.", required: [], properties: [
+        definition(.clickElement, "Click a reliable AX element from the latest get_app_state/get_window_state by element_index or element_id. Best for native macOS controls, dialogs, menus, and clearly exposed standard controls. For rich browser/web/canvas UIs such as YouTube, Docs, Sheets, and X/Twitter, prefer click_point on the visible screenshot target. This is a scoped action: include process_id and window_id from the snapshot when available; Muesli revalidates them immediately before acting and fails if the live element is in another process/window.", required: [], properties: [
             "process_id": .integer("Optional process id from the latest state; action fails if the resolved element is in another process."),
+            "window_id": .integer("Optional window id from the latest state; action fails if the resolved element is in another window."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state, for example e12."),
             "clicks": .integer("1 for single click, 2 for double click."),
@@ -116,13 +117,14 @@ enum ComputerUseToolRegistry {
             "button": .string("left or right."),
             "label": .string("Human target label for trace and safety."),
         ], risk: "confirmation for risky labels or unknown coordinate targets"),
-        definition(.focusElement, "Move keyboard/accessibility focus to a reliable AX element from the latest get_window_state/get_app_state without activating it as a button/link. Use mainly for native controls, standard editable fields, or clearly exposed web edit targets before press_key/type_text/paste_text. Avoid using this to walk generic web areas or visual search results; prefer click_point there. Element references are snapshot-scoped and expire after the next state capture. This mutating tool does not accept window_id; use get_window_state with window_id to refresh the intended target first.", required: [], properties: [
+        definition(.focusElement, "Move keyboard/accessibility focus to a reliable AX element from the latest get_window_state/get_app_state without activating it as a button/link. Use mainly for native controls, standard editable fields, or clearly exposed web edit targets before press_key/type_text/paste_text. Avoid using this to walk generic web areas or visual search results; prefer click_point there. Element references are snapshot-scoped and expire after the next state capture. Include process_id and window_id from the snapshot when available; Muesli revalidates both immediately before focusing.", required: [], properties: [
             "process_id": .integer("Optional process id from the latest state; action fails if the resolved element is in another process."),
+            "window_id": .integer("Optional window id from the latest state; action fails if the resolved element is in another window."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state, for example e12."),
             "label": .string("Human target label for trace."),
         ], risk: "focus movement only; does not activate buttons or links"),
-        definition(.activateFocused, "Send an activation primitive to the currently focused UI element without changing focus first. Best for native buttons, menu items, dialogs, and explicit focused controls after keyboard navigation. Avoid this for generic web areas, action menus, and rich web search results; use screenshot-backed click_point for visible web targets. Attempts AXPress on current focus and falls back to Enter on the focused app. This mutating tool does not accept window_id; use get_window_state with window_id to refresh the intended target first.", required: [], properties: [
+        definition(.activateFocused, "Send an activation primitive to the currently focused UI element without changing focus first. This is an ambient current-focus action, not a window-scoped action: it accepts process_id but not window_id or element ids. Best for native buttons, menu items, dialogs, and explicit focused controls after keyboard navigation. Avoid this for generic web areas, action menus, and rich web search results; use screenshot-backed click_point for visible web targets. Attempts AXPress on current focus and falls back to Enter on the focused app.", required: [], properties: [
             "app_name": .string("Optional target app name. Use only to activate the app before reading current focus."),
             "app_bundle_id": .string("Optional target app bundle identifier. Use only to activate the app before reading current focus."),
             "process_id": .integer("Optional expected process id from latest_window_state; activation fails if current focus is in another process."),
@@ -130,6 +132,7 @@ enum ComputerUseToolRegistry {
         ], risk: "confirmation for risky labels; does not accept stale element ids"),
         definition(.performSecondaryAction, "Perform an advertised AX action other than AXPress on an element from the latest get_app_state/get_window_state. Use only action_name values present on that element's action_names.", required: ["action_name"], properties: [
             "process_id": .integer("Optional process id from the latest state; action fails if the resolved element is in another process."),
+            "window_id": .integer("Optional window id from the latest state; action fails if the resolved element is in another window."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state."),
             "action_name": .string("Advertised AX action name, for example AXShowMenu, AXConfirm, AXCancel, AXIncrement, AXDecrement, or AXScrollDownByPage."),
@@ -137,24 +140,27 @@ enum ComputerUseToolRegistry {
         ], risk: "only invokes advertised AX actions; confirmation for risky labels"),
         definition(.setValue, "Set a reliable native/standard AX element value by element_index/element_id from the latest state. Prefer type_text/paste_text for browser editors and free-form web editors that ignore AXValue.", required: ["value"], properties: [
             "process_id": .integer("Optional process id from the latest state; action fails if the resolved element is in another process."),
+            "window_id": .integer("Optional window id from the latest state; action fails if the resolved element is in another window."),
             "element_index": .integer("Temporary element index from the latest state."),
             "element_id": .string("Temporary element id from the latest state."),
             "value": .string("Value to set."),
             "label": .string("Human target label for trace."),
         ], risk: "local validation only; no send/submit bypass"),
-        definition(.typeText, "Insert literal text into a target. Prefer process_id plus element_index/element_id from latest_window_state; Muesli focuses the element, uses it only if live focus matches, tries AXSelectedText insertion with AX readback, then falls back to targeted key events. This mutating tool does not accept window_id; use get_window_state with window_id to refresh the intended target first. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
+        definition(.typeText, "Insert literal text into a target. Prefer process_id, window_id, and element_index/element_id from latest_window_state; Muesli focuses the element, uses it only if live focus matches, tries AXSelectedText insertion with AX readback, then falls back to targeted key events. If no element is supplied, this is a focused-text action and any supplied process_id/window_id must match the live focused editable target. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
             "app_name": .string("Optional target app name, for example Notes."),
             "app_bundle_id": .string("Optional target app bundle identifier, for example com.apple.Notes."),
             "process_id": .integer("Optional process id from latest_window_state or list_windows."),
+            "window_id": .integer("Optional window id from latest_window_state or list_windows."),
             "element_index": .integer("Optional temporary editable element index from the latest state."),
             "element_id": .string("Optional temporary editable element id from the latest state."),
             "text": .string("Text to type."),
             "label": .string("Human target label for trace."),
         ], risk: "safe primitive; focuses optional element target and can route key events to a process"),
-        definition(.pasteText, "Paste or insert text into a target, then restore the user's clipboard if clipboard fallback is needed. Prefer process_id plus element_index/element_id when available. This mutating tool does not accept window_id; use get_window_state with window_id to refresh the intended target first. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
+        definition(.pasteText, "Paste or insert text into a target, then restore the user's clipboard if clipboard fallback is needed. Prefer process_id, window_id, and element_index/element_id when available. If no element is supplied, this is a focused-text action and any supplied process_id/window_id must match the live focused editable target. Finish only after inspecting the post-action AX state/screenshot and confirming the requested text is visible.", required: ["text"], properties: [
             "app_name": .string("Optional target app name, for example Notes."),
             "app_bundle_id": .string("Optional target app bundle identifier, for example com.apple.Notes."),
             "process_id": .integer("Optional process id from latest_window_state or list_windows."),
+            "window_id": .integer("Optional window id from latest_window_state or list_windows."),
             "element_index": .integer("Optional temporary editable element index from the latest state."),
             "element_id": .string("Optional temporary editable element id from the latest state."),
             "text": .string("Text to paste."),
@@ -172,6 +178,8 @@ enum ComputerUseToolRegistry {
             "modifiers": .array("Required or optional modifiers.", item: .string("Modifier", enumValues: ComputerUseKeyModifier.allCases.map(\.rawValue))),
         ], risk: "confirmation for Cmd-Q and Cmd-W"),
         definition(.scroll, "Scroll the current view or a scrollable AX element from the latest state.", required: ["direction"], properties: [
+            "process_id": .integer("Optional process id from the latest state when scrolling an element; action fails if the resolved element is in another process."),
+            "window_id": .integer("Optional window id from the latest state when scrolling an element; action fails if the resolved element is in another window."),
             "element_index": .integer("Optional temporary scrollable element index from the latest state."),
             "element_id": .string("Optional temporary scrollable element id from the latest state."),
             "direction": .string("Scroll direction.", enumValues: ["up", "down", "left", "right"]),

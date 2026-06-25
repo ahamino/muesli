@@ -500,6 +500,12 @@ struct ComputerUseToolInvocation: Codable, Equatable {
             }
             return elementIndex == nil && trimmed(elementID).isEmpty ? "focus_element requires element_index or element_id" : nil
         case .activateFocused:
+            if windowID != nil {
+                return "activate_focused is ambient current-focus action and does not accept window_id"
+            }
+            if elementIndex != nil || !trimmed(elementID).isEmpty {
+                return "activate_focused does not accept element_index or element_id; use focus_element first or click_element/click_point"
+            }
             return nil
         case .performSecondaryAction:
             if trimmed(actionName).isEmpty {
@@ -522,6 +528,9 @@ struct ComputerUseToolInvocation: Codable, Equatable {
         case .pasteText:
             return trimmed(text).isEmpty ? "paste_text requires text" : nil
         case .pressKey, .hotkey:
+            if windowID != nil || elementIndex != nil || !trimmed(elementID).isEmpty {
+                return "\(tool.rawValue) is ambient current-focus action and does not accept window_id, element_index, or element_id"
+            }
             return trimmed(key).isEmpty ? "\(tool.rawValue) requires key" : nil
         case .scroll:
             if let elementIndex, elementIndex <= 0 {
