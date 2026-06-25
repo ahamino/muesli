@@ -99,7 +99,9 @@ final class GoogleCalendarClient {
         let now = Date()
         resetEventSyncIfNeededForWindow(daysAhead: resolvedDayCount, now: now)
 
-        guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: resolvedDayCount) else { return [] }
+        guard let future = UpcomingMeetingsWindow.endDate(from: now, dayCount: resolvedDayCount) else {
+            throw GoogleCalendarClientError.requestFailed("invalid upcoming events window")
+        }
 
         // Refresh the calendar list. If this fails, fall back to whatever we
         // last saw — better to return something than nothing.
@@ -283,7 +285,7 @@ final class GoogleCalendarClient {
             }
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                break
+                throw GoogleCalendarClientError.requestFailed("calendarList returned malformed JSON")
             }
             if let entries = json["items"] as? [[String: Any]] {
                 for entry in entries {
