@@ -134,6 +134,7 @@ final class GoogleCalendarClient {
         }
 
         let enabled = cachedCalendarList.filter { !disabledCalendarIDs.contains($0.id) }
+        var failedCalendarIDs = Set<String>()
         // Drop cached events for any calendar that's now disabled or absent so
         // we don't leak stale events into the merged result.
         let keepIDs = Set(enabled.map(\.id))
@@ -155,12 +156,16 @@ final class GoogleCalendarClient {
                 throw authError
             } catch {
                 fputs("[google-cal] events fetch failed for \(calendar.id), keeping cached events: \(error)\n", stderr)
+                failedCalendarIDs.insert(calendar.id)
                 completedAllFetches = false
             }
         }
 
         let merged = cachedEventsByCalendar
-            .filter { cachedEventScopesByCalendar[$0.key] == windowScope }
+            .filter {
+                cachedEventScopesByCalendar[$0.key] == windowScope ||
+                    failedCalendarIDs.contains($0.key)
+            }
             .values
             .flatMap { $0.values }
             .filter { $0.endDate > now && $0.startDate < future }
@@ -220,7 +225,6 @@ final class GoogleCalendarClient {
                 }
                 fputs("[google-cal] sync token expired for \(calendarID), performing full re-fetch\n", stderr)
                 syncTokens.removeValue(forKey: calendarID)
-                cachedEventScopesByCalendar.removeValue(forKey: calendarID)
                 return try await fetchEvents(
                     forCalendarID: calendarID,
                     daysAhead: daysAhead,
