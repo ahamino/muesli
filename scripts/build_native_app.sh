@@ -258,7 +258,7 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
     fi
     if [[ -n "$PROFILE_APP_IDENTIFIER" ]]; then
       PROFILE_BUNDLE_ID="${PROFILE_APP_IDENTIFIER#*.}"
-      if [[ "$PROFILE_BUNDLE_ID" != "$BUNDLE_ID" && "$PROFILE_BUNDLE_ID" != *"*"* ]]; then
+      if [[ "$BUNDLE_ID" != $PROFILE_BUNDLE_ID ]]; then
         echo "ERROR: provisioning profile app identifier '$PROFILE_APP_IDENTIFIER' does not match bundle ID '$BUNDLE_ID'." >&2
         exit 1
       fi
