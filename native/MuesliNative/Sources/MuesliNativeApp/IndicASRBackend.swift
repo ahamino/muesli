@@ -103,6 +103,20 @@ private enum IndicASRConfig {
     }
 }
 
+private enum IndicASRLogging {
+    private static let verboseEnv = "MUESLI_DEBUG_INDIC_ASR_LOGS"
+
+    static var isVerboseEnabled: Bool {
+        let raw = ProcessInfo.processInfo.environment[verboseEnv]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return raw == "1" || raw == "true" || raw == "yes"
+    }
+
+    static func logVerbose(_ message: @autoclosure () -> String) {
+        guard isVerboseEnabled else { return }
+        fputs("[indicasr] \(message())\n", stderr)
+    }
+}
+
 private struct IndicASRModelLayout {
     let root: URL
     let encoderDirectory: URL
@@ -184,14 +198,6 @@ enum IndicASRModelStore {
         if fm.fileExists(atPath: hfEncoder.appendingPathComponent(IndicASRConfig.encoderPackage).path),
            fm.fileExists(atPath: hfRNNT.appendingPathComponent(IndicASRConfig.rnntDecoderPackage).path) {
             return IndicASRModelLayout(root: directory, encoderDirectory: hfEncoder, rnntDirectory: hfRNNT, metadataDirectory: hfMetadata)
-        }
-
-        let splitEncoder = directory.appendingPathComponent("20260526-182651-convert", isDirectory: true)
-        let splitRNNT = directory.appendingPathComponent("jarvis-rnnt-coreml", isDirectory: true)
-        let splitMetadata = directory.appendingPathComponent("metadata", isDirectory: true)
-        if fm.fileExists(atPath: splitEncoder.appendingPathComponent(IndicASRConfig.encoderPackage).path),
-           fm.fileExists(atPath: splitRNNT.appendingPathComponent(IndicASRConfig.rnntDecoderPackage).path) {
-            return IndicASRModelLayout(root: directory, encoderDirectory: splitEncoder, rnntDirectory: splitRNNT, metadataDirectory: splitMetadata)
         }
 
         return nil
@@ -684,7 +690,7 @@ private struct IndicASRRNNTGreedyDecoder {
         }
 
         let mel = models.melExtractor.compute(audio: audioSamples)
-        fputs("[indicasr] mel frames=\(mel.realFrameCount), samples=\(audioSamples.count)\n", stderr)
+        IndicASRLogging.logVerbose("mel frames=\(mel.realFrameCount), samples=\(audioSamples.count)")
         let melArray = try makeFloatArray(shape: [1, IndicASRConfig.nMels, IndicASRConfig.melFrames], values: mel.mel)
         let lengthArray = try MLMultiArray(shape: [1], dataType: .int32)
         lengthArray[0] = NSNumber(value: Int32(mel.realFrameCount))
@@ -702,7 +708,7 @@ private struct IndicASRRNNTGreedyDecoder {
         }
 
         let encodedFrameCount = min(max(encodedLengths[0].intValue, 0), IndicASRConfig.melFrames)
-        fputs("[indicasr] encoded frames=\(encodedFrameCount), encoded shape=\(encoded.shape)\n", stderr)
+        IndicASRLogging.logVerbose("encoded frames=\(encodedFrameCount), encoded shape=\(encoded.shape)")
         guard encodedFrameCount > 0 else { return "" }
 
         var hState = try zeroFloatArray(shape: [IndicASRConfig.predLayers, 1, IndicASRConfig.predHiddenDim])
@@ -713,7 +719,7 @@ private struct IndicASRRNNTGreedyDecoder {
         for frameIndex in 0..<encodedFrameCount {
             if frameIndex > 0 && frameIndex % 10 == 0 { await Task.yield() }
             if frameIndex > 0 && frameIndex % 100 == 0 {
-                fputs("[indicasr] decoded frame \(frameIndex)/\(encodedFrameCount), tokens=\(tokenIds.count)\n", stderr)
+                IndicASRLogging.logVerbose("decoded frame \(frameIndex)/\(encodedFrameCount), tokens=\(tokenIds.count)")
             }
             let encFrame = try await runJointEncFrame(encoded: encoded, frameIndex: frameIndex)
 
@@ -746,7 +752,7 @@ private struct IndicASRRNNTGreedyDecoder {
         }
 
         let text = models.tokenizer.decode(tokenIds, language: language)
-        fputs("[indicasr] decoded tokens=\(tokenIds.count), text chars=\(text.count)\n", stderr)
+        IndicASRLogging.logVerbose("decoded tokens=\(tokenIds.count), text chars=\(text.count)")
         return text
     }
 
