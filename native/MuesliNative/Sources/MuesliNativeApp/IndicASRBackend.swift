@@ -83,6 +83,8 @@ private enum IndicASRConfig {
     ]
 
     static let requiredLanguagePackages = IndicASRLanguage.allCases.map(\.jointPostNetPackage)
+    // Keep the full exported metadata set in the cache even though the current
+    // RNNT path uses language-specific post-nets instead of reading masks.
     static let requiredMetadataFiles = [vocabFile, languageMasksFile, configFile, preprocessorConstantsFile]
 
     static func packageRelativeDirectory(_ packageName: String) -> String {
@@ -465,6 +467,7 @@ private final class IndicASRMelSpectrogram {
         }
 
         var powerSpecT = [Float](repeating: 0, count: nBins * realFrameCount)
+        // powerSpec is [frames, nBins] row-major; vDSP_mtrans M/N are columns/rows here.
         vDSP_mtrans(powerSpec, 1, &powerSpecT, 1, vDSP_Length(nBins), vDSP_Length(realFrameCount))
 
         var melRaw = [Float](repeating: 0, count: nMels * realFrameCount)
@@ -601,6 +604,9 @@ private struct IndicASRModels {
 actor IndicASRTranscriber {
     private var models: IndicASRModels?
     private var loadTask: Task<IndicASRModels, Error>?
+    private var loadGeneration: Int = 0
+    private var warmupTask: Task<Void, Never>?
+    private var hasCompletedWarmup = false
 
     func loadModels(progress: ((Double, String?) -> Void)? = nil) async throws {
         if models != nil { return }
@@ -612,23 +618,32 @@ actor IndicASRTranscriber {
         let task = Task<IndicASRModels, Error> {
             progress?(0.05, "Loading Indic ASR CoreML artifacts...")
             let layout = try await IndicASRModelStore.resolvedLayout(progress: progress)
+            try Task.checkCancellation()
             let loaded = try await IndicASRModels.load(from: layout)
+            try Task.checkCancellation()
             progress?(1.0, "Indic ASR loaded")
             return loaded
         }
 
+        loadGeneration += 1
+        let expectedGeneration = loadGeneration
         loadTask = task
         do {
-            models = try await task.value
+            let loaded = try await task.value
+            guard loadGeneration == expectedGeneration else { return }
+            models = loaded
             loadTask = nil
         } catch {
-            loadTask = nil
+            if loadGeneration == expectedGeneration {
+                loadTask = nil
+            }
             throw error
         }
     }
 
     func prepare(progress: ((Double, String?) -> Void)? = nil) async throws {
         try await loadModels(progress: progress)
+        scheduleWarmupIfNeeded()
     }
 
     func transcribe(
@@ -636,6 +651,9 @@ actor IndicASRTranscriber {
         language: IndicASRLanguage = IndicASRLanguage.defaultLanguage
     ) async throws -> (text: String, processingTime: Double) {
         try await loadModels()
+        if let warmupTask {
+            await warmupTask.value
+        }
         guard let models else {
             throw NSError(domain: "IndicASR", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Indic ASR models are not loaded.",
@@ -649,9 +667,40 @@ actor IndicASRTranscriber {
     }
 
     func shutdown() {
+        loadGeneration += 1
         loadTask?.cancel()
         loadTask = nil
         models = nil
+        warmupTask?.cancel()
+        warmupTask = nil
+        hasCompletedWarmup = false
+    }
+
+    private func scheduleWarmupIfNeeded() {
+        guard !hasCompletedWarmup, warmupTask == nil, models != nil else { return }
+        warmupTask = Task { await self.runWarmup() }
+    }
+
+    private func runWarmup() async {
+        guard let models else {
+            warmupTask = nil
+            return
+        }
+
+        IndicASRLogging.logVerbose("background warmup started")
+        do {
+            let warmupSamples = [Float](repeating: 0, count: IndicASRConfig.sampleRate / 2)
+            _ = try await IndicASRRNNTGreedyDecoder(models: models).transcribe(audioSamples: warmupSamples, language: .defaultLanguage)
+            guard !Task.isCancelled else {
+                warmupTask = nil
+                return
+            }
+            hasCompletedWarmup = true
+            IndicASRLogging.logVerbose("background warmup complete")
+        } catch {
+            IndicASRLogging.logVerbose("background warmup failed: \(error)")
+        }
+        warmupTask = nil
     }
 }
 
@@ -760,6 +809,11 @@ private struct IndicASRRNNTGreedyDecoder {
         let input = try MLMultiArray(shape: [1, 1, NSNumber(value: IndicASRConfig.encoderDim)], dataType: .float32)
         let ptr = input.dataPointer.bindMemory(to: Float.self, capacity: IndicASRConfig.encoderDim)
         let encodedStrides = encoded.strides.map(\.intValue)
+        guard encodedStrides.count >= 3 else {
+            throw NSError(domain: "IndicASR", code: 40, userInfo: [
+                NSLocalizedDescriptionKey: "Unexpected Indic ASR encoder output rank \(encodedStrides.count); expected at least 3. Shape: \(encoded.shape).",
+            ])
+        }
         for dim in 0..<IndicASRConfig.encoderDim {
             let sourceOffset = encodedStrides[1] * dim + encodedStrides[2] * frameIndex
             ptr[dim] = floatValue(encoded, offset: sourceOffset)
@@ -793,6 +847,11 @@ private struct IndicASRRNNTGreedyDecoder {
         let input = try MLMultiArray(shape: [1, 1, NSNumber(value: IndicASRConfig.predHiddenDim)], dataType: .float32)
         let ptr = input.dataPointer.bindMemory(to: Float.self, capacity: IndicASRConfig.predHiddenDim)
         let strides = decoderOutputs.strides.map(\.intValue)
+        guard strides.count >= 2 else {
+            throw NSError(domain: "IndicASR", code: 41, userInfo: [
+                NSLocalizedDescriptionKey: "Unexpected Indic ASR decoder output rank \(strides.count); expected at least 2. Shape: \(decoderOutputs.shape).",
+            ])
+        }
         for dim in 0..<IndicASRConfig.predHiddenDim {
             ptr[dim] = floatValue(decoderOutputs, offset: strides[1] * dim)
         }

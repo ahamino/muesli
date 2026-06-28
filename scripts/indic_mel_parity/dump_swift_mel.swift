@@ -233,6 +233,7 @@ private final class SwiftMelSpectrogram {
         }
 
         var powerSpecT = [Float](repeating: 0, count: nBins * realFrameCount)
+        // powerSpec is [frames, nBins] row-major; vDSP_mtrans M/N are columns/rows here.
         vDSP_mtrans(powerSpec, 1, &powerSpecT, 1, vDSP_Length(nBins), vDSP_Length(realFrameCount))
 
         var melRaw = [Float](repeating: 0, count: Config.nMels * realFrameCount)
