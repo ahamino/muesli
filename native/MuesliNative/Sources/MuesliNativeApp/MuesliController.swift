@@ -3976,6 +3976,7 @@ final class MuesliController: NSObject {
                     calendarEventID: calendarEventID,
                     meetingID: meetingID,
                     backend: meetingBackend,
+                    templateSnapshot: templateSnapshot,
                     endDate: endDate
                 )
             } catch is CancellationError {
@@ -4074,6 +4075,7 @@ final class MuesliController: NSObject {
                     calendarEventID: meeting.calendarEventID,
                     meetingID: meetingID,
                     backend: meetingBackend,
+                    templateSnapshot: self.meetingTemplateSnapshot(for: meeting),
                     endDate: nil
                 )
             } catch is CancellationError {
@@ -4339,6 +4341,7 @@ final class MuesliController: NSObject {
         calendarEventID: String?,
         meetingID: Int64,
         backend: BackendOption,
+        templateSnapshot: MeetingTemplateSnapshot,
         endDate: Date?
     ) async throws {
         var shouldRetryAfterPermissionRequest = config.useCoreAudioTap
@@ -4367,6 +4370,7 @@ final class MuesliController: NSObject {
                 backend: backend,
                 runtime: runtime,
                 config: config,
+                templateSnapshot: templateSnapshot,
                 transcriptionCoordinator: transcriptionCoordinator,
                 meetingMicRecorder: meetingMicRecorder
             )
