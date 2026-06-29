@@ -30,8 +30,15 @@ private enum ManualNotesSaveStatus {
 // reference and never reads liveMeetingTranscript in its own body.
 private struct LiveTranscriptSection: View {
     let appState: AppState
+    let transcriptPrefix: String
+
     var body: some View {
-        LiveTranscriptView(transcript: appState.liveMeetingTranscript)
+        LiveTranscriptView(
+            transcript: MeetingResumePolicy.combinedResumeTranscript(
+                prior: transcriptPrefix,
+                new: appState.liveMeetingTranscript
+            )
+        )
     }
 }
 
@@ -244,27 +251,44 @@ struct MeetingDetailView: View {
         if showsManualNotesEditor(for: meeting) {
             if meeting.status == .recording {
                 let isManualNotesEditable = canEditManualNotes(for: meeting)
+                let persistedNotes = Self.notesContent(for: meeting)
+                let hasPersistedNotes = !meeting.formattedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !meeting.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ZStack {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
-                        manualNotesToolbar(for: meeting)
-                            .disabled(!isManualNotesEditable)
-                        MarkdownRichTextEditor(
-                            text: $editableManualNotes,
-                            command: $manualEditorCommand,
-                            shouldFocus: isManualNotesEditable,
-                            isEditable: isManualNotesEditable,
-                            onTextChange: { notes in
-                                guard isManualNotesEditable else { return }
-                                saveManualNotes(meetingID: meeting.id, notes: notes)
-                            }
-                        )
-                        .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
-                        .background(MuesliTheme.backgroundBase)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-                        )
+                        if hasPersistedNotes {
+                            MeetingNotesView(markdown: persistedNotes)
+                                .frame(maxWidth: 980, maxHeight: .infinity, alignment: .topLeading)
+                                .background(MuesliTheme.backgroundBase)
+                                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                            manualNotesToolbar(for: meeting)
+                                .disabled(!isManualNotesEditable)
+                            MarkdownRichTextEditor(
+                                text: $editableManualNotes,
+                                command: $manualEditorCommand,
+                                shouldFocus: isManualNotesEditable,
+                                isEditable: isManualNotesEditable,
+                                onTextChange: { notes in
+                                    guard isManualNotesEditable else { return }
+                                    saveManualNotes(meetingID: meeting.id, notes: notes)
+                                }
+                            )
+                            .background(MuesliTheme.backgroundBase)
+                            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                            )
+                            .frame(maxHeight: hasPersistedNotes ? 260 : .infinity)
+                        }
+                        .frame(maxWidth: 980, maxHeight: hasPersistedNotes ? nil : .infinity, alignment: .topLeading)
                     }
                     .padding(.horizontal, 40)
                     .padding(.top, 12)
@@ -274,7 +298,7 @@ struct MeetingDetailView: View {
                     .allowsHitTesting(recordingMode == .notes)
                     .accessibilityHidden(recordingMode != .notes)
 
-                    LiveTranscriptSection(appState: appState)
+                    LiveTranscriptSection(appState: appState, transcriptPrefix: meeting.rawTranscript)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(recordingMode == .live ? 1 : 0)
                         .allowsHitTesting(recordingMode == .live)
