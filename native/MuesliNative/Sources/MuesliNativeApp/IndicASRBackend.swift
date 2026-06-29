@@ -363,6 +363,10 @@ private final class IndicASRTokenizer {
 }
 
 private final class IndicASRMelSpectrogram {
+    // TODO: Add a CI golden-value regression test for this frontend before
+    // promoting Indic ASR beyond experimental support. The encoder expects the
+    // exact upstream mel contract, so future changes to padding, FFT, transpose,
+    // or filterbank layout should fail loudly instead of silently degrading ASR.
     private struct PreprocessorConstants {
         let nFFT: Int
         let winLength: Int
