@@ -89,6 +89,21 @@ struct StreamingDictationControllerTests {
     }
 
     @available(macOS 15, *)
+    @Test("currentPower reflects streaming recorder level")
+    func currentPowerReflectsStreamingRecorderLevel() {
+        let transcriber = ImmediateStreamingTranscriber()
+        let recorder = InspectableStreamingDictationRecorder()
+        let controller = StreamingDictationController(
+            transcriber: transcriber,
+            recorder: recorder
+        )
+
+        recorder.power = -27
+
+        #expect(controller.currentPower() == -27)
+    }
+
+    @available(macOS 15, *)
     @Test("stop waits for pending stream state before draining queued audio")
     func stopWaitsForPendingStreamStateBeforeDrainingQueuedAudio() async {
         let transcriber = DelayedStreamingTranscriber()
@@ -416,6 +431,7 @@ private final class InspectableStreamingDictationRecorder: StreamingDictationRec
     var preparedPreferredInputDeviceID: AudioObjectID?
     var startedPreferredInputDeviceID: AudioObjectID?
     var stopURL: URL?
+    var power: Float = -160
 
     func prepare() throws {
         prepareCalls += 1
@@ -441,7 +457,7 @@ private final class InspectableStreamingDictationRecorder: StreamingDictationRec
     }
 
     func currentPower() -> Float {
-        -160
+        power
     }
 }
 

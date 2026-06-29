@@ -65,7 +65,10 @@ final class StreamingDictationController {
     init(
         transcriber: NemotronStreamingTranscribing,
         preferredInputDeviceID: AudioObjectID? = nil,
-        recorder: StreamingDictationRecording = StreamingMicRecorder(),
+        recorder: StreamingDictationRecording = FallbackStreamingDictationRecorder(
+            primary: AudioQueueInputRecorder(directoryName: "muesli-native-dictation-streaming"),
+            fallback: StreamingMicRecorder(directoryName: "muesli-native-dictation-streaming")
+        ),
         stopStreamStateTimeout: TimeInterval = 1.0,
         stopDrainTimeout: TimeInterval? = nil,
         chunkSamples: Int = 8960
@@ -257,6 +260,10 @@ final class StreamingDictationController {
 
     func cancel() {
         resetActiveSession(cancelRecorder: true)
+    }
+
+    func currentPower() -> Float {
+        recorder.currentPower()
     }
 
     private func failActiveSession(sessionID: UUID, error: Error) {

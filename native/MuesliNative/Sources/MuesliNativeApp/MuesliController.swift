@@ -6307,6 +6307,10 @@ final class MuesliController: NSObject {
                     self.handleNemotronStreamingStartFailure()
                     return
                 }
+                self.activateDictationRecordingIndicator()
+                self.indicator.powerProvider = { [weak controller] in
+                    controller?.currentPower() ?? -160
+                }
                 fputs("[muesli-native] Nemotron streaming controller started\n", stderr)
             }
         }
@@ -6404,8 +6408,6 @@ final class MuesliController: NSObject {
                 dictationStartedAt = Date()
                 markDictationLatency("sound_start_requested:nemotron-toggle")
                 SoundController.playDictationStart(enabled: shouldPlayDictationLifecycleSounds && !isDictationTestMode)
-                setState(.recording)
-                indicator.setToggleDictation(true, config: config)
                 dictationAudioSessionManager.beginExternalSession(
                     source: "nemotron-toggle",
                     duckingEnabled: config.muteSystemAudioDuringDictation,
