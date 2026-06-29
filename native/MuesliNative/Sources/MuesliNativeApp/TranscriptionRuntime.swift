@@ -64,6 +64,12 @@ actor TranscriptionCoordinator {
         }
     }
 
+    func unloadNemotron35Transcriber() async {
+        if #available(macOS 15, *), let transcriber = _nemotron35Transcriber as? Nemotron35StreamingTranscriber {
+            await transcriber.shutdown()
+        }
+    }
+
     @available(macOS 15, *)
     private var qwen3Transcriber: Qwen3AsrTranscriber {
         if _qwen3Transcriber == nil {

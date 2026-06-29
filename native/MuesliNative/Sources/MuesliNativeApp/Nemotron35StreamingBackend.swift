@@ -96,7 +96,7 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
         let installedRevision = Self.installedRevision()
         if loaded, loadedRevision == installedRevision { return }
         if loaded {
-            shutdown()
+            clearLoadedModels()
         }
 
         fputs("[nemotron35] loading CoreML models...\n", stderr)
@@ -132,6 +132,16 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
         loaded = true
         loadedRevision = installedRevision
         fputs("[nemotron35] models ready (\(tokenizer.count) vocab tokens)\n", stderr)
+    }
+
+    private func clearLoadedModels() {
+        preprocessor = nil
+        encoder = nil
+        decoder = nil
+        joint = nil
+        tokenizer = [:]
+        loaded = false
+        loadedRevision = nil
     }
 
     private func completeLoadWaiters(throwing error: Error? = nil) {
@@ -192,8 +202,7 @@ actor Nemotron35StreamingTranscriber: NemotronStreamingTranscribing {
 
     func shutdown() {
         loadGeneration += 1
-        preprocessor = nil; encoder = nil; decoder = nil; joint = nil
-        tokenizer = [:]; loaded = false; loadedRevision = nil
+        clearLoadedModels()
         isLoading = false
         completeLoadWaiters(throwing: TranscriberError.notLoaded)
     }

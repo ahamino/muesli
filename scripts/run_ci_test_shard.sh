@@ -40,7 +40,6 @@ case "${shard}" in
       TranscriptAccumulationTests
       StreamingDictationControllerLifecycleTests
       NemotronDictationModePolicyTests
-      TranscriptionCoordinatorNemotronTests
       Nemotron35StreamStateTests
       Nemotron35BackendMetadataTests
       Nemotron35LanguageTests

@@ -1029,6 +1029,7 @@ struct ModelsView: View {
     private func updateNemotron35(_ option: BackendOption) {
         Task {
             do {
+                await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
                 try await deleteModelFiles(option)
                 await MainActor.run {
                     downloadedModels.remove(option.model)
