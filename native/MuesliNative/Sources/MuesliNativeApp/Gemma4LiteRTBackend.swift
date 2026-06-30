@@ -195,6 +195,13 @@ actor Gemma4LiteRTTranscriber {
 
     private var engine: OpaquePointer?
     private var isLoading = false
+
+    deinit {
+        if let engine {
+            litert_lm_engine_delete(engine)
+        }
+    }
+
     private var loadGeneration = 0
     private var loadWaiters: [CheckedContinuation<Void, Error>] = []
 
@@ -355,7 +362,7 @@ actor Gemma4LiteRTTranscriber {
     static func cleanTranscript(_ text: String) -> String {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = cleaned.lowercased()
-        for prefix in ["final transcript:", "transcript:", "transcription:"] where lowered.hasPrefix(prefix) {
+        for prefix in ["final transcript:", "transcription:", "transcript:"] where lowered.hasPrefix(prefix) {
             cleaned = String(cleaned.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
             break
         }
@@ -420,7 +427,6 @@ actor Gemma4LiteRTTranscriber {
             "i do not have access to the audio",
             "i can't listen to audio",
             "i cannot listen to audio",
-            "as an ai",
             "while gemma 4 is a powerful model",
             "depending on the specific task and hardware",
             "might offer a faster experience",
@@ -428,6 +434,13 @@ actor Gemma4LiteRTTranscriber {
         ]
         if assistantMarkers.contains(where: { normalized.contains($0) }) {
             return true
+        }
+        // "as an ai" must match at a word boundary to avoid false-positive on "as an aide".
+        if let range = normalized.range(of: "as an ai") {
+            let after = range.upperBound
+            if after == normalized.endIndex || !normalized[after].isLetter {
+                return true
+            }
         }
 
         let assistantPrefixes = [

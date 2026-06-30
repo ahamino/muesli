@@ -249,6 +249,18 @@ struct Gemma4LiteRTTranscriberTests {
         #expect(!Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
             "That's a valid point, and I want to transcribe the rest of this sentence literally."
         ))
+        #expect(!Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "She works as an aide at the hospital."
+        ))
+        #expect(!Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "He served as an aide to the senator for three years."
+        ))
+        #expect(Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "Speaking as an AI, I can confirm that the model is efficient."
+        ))
+        #expect(Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "I am not able to respond as an AI assistant."
+        ))
     }
 
     @available(macOS 15, *)
@@ -285,6 +297,19 @@ struct Gemma4LiteRTTranscriberTests {
             fromResponseJSON: #"{"content":"Hello, I am trying to check whether you can hear me properly."}"#
         )
         #expect(text == "Hello, I am trying to check whether you can hear me properly.")
+    }
+
+    @available(macOS 15, *)
+    @Test("gemma4 cleanTranscript strips prefixes without corrupting transcription: prefix")
+    func gemma4CleanTranscriptPrefixOrdering() {
+        // "transcript:" is a prefix of "transcription:", so the longer form must be checked first.
+        // If "transcript:" were matched first, "Transcription: Hello world" would drop only 11 chars
+        // yielding "on: Hello world" instead of "Hello world".
+        #expect(Gemma4LiteRTTranscriber.cleanTranscript("Transcription: Hello world") == "Hello world")
+        #expect(Gemma4LiteRTTranscriber.cleanTranscript("Transcript: Hello world") == "Hello world")
+        #expect(Gemma4LiteRTTranscriber.cleanTranscript("Final transcript: Hello world") == "Hello world")
+        // Longer prefix takes precedence over shorter overlapping prefix
+        #expect(Gemma4LiteRTTranscriber.cleanTranscript("Transcription: transcript:") == "transcript:")
     }
 
     @available(macOS 15, *)
