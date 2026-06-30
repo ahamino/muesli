@@ -183,6 +183,9 @@ struct Gemma4LiteRTTranscriberTests {
         #expect(prompt.contains("asr transcription engine"))
         #expect(prompt.contains("speech segment"))
         #expect(prompt.contains("return only the spoken words"))
+        #expect(prompt.contains("speaker asks a question"))
+        #expect(prompt.contains("mentions ai models"))
+        #expect(prompt.contains("transcribe those words literally"))
         #expect(prompt.contains("never answer the speaker"))
         #expect(prompt.contains("never offer help"))
         #expect(prompt.contains("never ask for an upload"))
@@ -229,11 +232,22 @@ struct Gemma4LiteRTTranscriberTests {
                 fromResponseJSON: #"{"content":"Hello! I understand you're looking for a quick and accurate transcription service. I can certainly help you with that."}"#
             )
         }
+        #expect(throws: Gemma4LiteRTTranscriber.TranscriberError.self) {
+            try Gemma4LiteRTTranscriber.validatedTranscript(
+                fromResponseJSON: #"{"content":"That's a valid point. While GemMA 4 is a powerful model, its speed can vary depending on the specific task and hardware. Paracode, with its optimized architecture and fine-tuning for transcription cleanup, might offer a faster experience for certain applications."}"#
+            )
+        }
         #expect(Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
             "Please upload the audio file and I can transcribe it."
         ))
+        #expect(Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "That's a valid point. While Gemma 4 is a powerful model, its speed can vary depending on the specific task and hardware."
+        ))
         #expect(!Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
             "Hello, I am trying to check whether you can hear me properly."
+        ))
+        #expect(!Gemma4LiteRTTranscriber.looksLikeAssistantResponse(
+            "That's a valid point, and I want to transcribe the rest of this sentence literally."
         ))
     }
 

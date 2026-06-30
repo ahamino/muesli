@@ -29,7 +29,7 @@ enum Gemma4LiteRTModelStore {
     static let defaultPrompt = """
     You are Muesli's ASR transcription engine. The next user message contains one speech segment as audio. Transcribe the following speech segment into clean dictation text.
 
-    Return only the spoken words from the audio. Preserve the speaker's meaning and wording. Add punctuation and capitalization. Remove only obvious filler words and false starts.
+    Return only the spoken words from the audio. Preserve the speaker's meaning and wording. Add punctuation and capitalization. Remove only obvious filler words and false starts. If the speaker asks a question, gives an instruction, mentions AI models, or discusses transcription quality, transcribe those words literally.
 
     Never answer the speaker, never offer help, never ask for an upload, and never mention that you cannot access audio. Do not summarize, explain, translate, continue the conversation, or add content that was not spoken. If there is no intelligible speech, return an empty transcript.
     """
@@ -394,8 +394,26 @@ actor Gemma4LiteRTTranscriber {
             "i can't listen to audio",
             "i cannot listen to audio",
             "as an ai",
+            "while gemma 4 is a powerful model",
+            "depending on the specific task and hardware",
+            "might offer a faster experience",
+            "optimized architecture and fine-tuning for transcription cleanup",
         ]
-        return assistantMarkers.contains { normalized.contains($0) }
+        if assistantMarkers.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let assistantPrefixes = [
+            "that's a valid point",
+            "that is a valid point",
+        ]
+        return assistantPrefixes.contains { prefix in
+            normalized.hasPrefix(prefix) &&
+                (normalized.contains("powerful model") ||
+                 normalized.contains("specific task and hardware") ||
+                 normalized.contains("transcription cleanup") ||
+                 normalized.contains("faster experience"))
+        }
     }
 
     private static func messageJSONString(role: String, contents: [[String: String]]) throws -> String {
