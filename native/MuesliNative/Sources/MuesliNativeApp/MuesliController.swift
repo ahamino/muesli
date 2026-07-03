@@ -5868,6 +5868,8 @@ final class MuesliController: NSObject {
             subtitle: "Still recording. Stop if the meeting ended.",
             actionLabel: "Stop Recording",
             dismissAfter: 30,
+            // MeetingNotificationController uses onStartRecording as its generic
+            // primary-action slot; here the primary action is stopping recording.
             onStartRecording: { [weak self] in
                 self?.stopMeetingRecording()
             },
