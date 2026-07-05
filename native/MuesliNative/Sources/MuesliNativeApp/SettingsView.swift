@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import MuesliCore
+import ProsodyKit
 
 private struct MeetingDetectionAppOption: Identifiable {
     let bundleID: String
@@ -309,6 +310,39 @@ struct SettingsView: View {
             ZStack(alignment: .trailing) {
                 Color.clear.frame(width: width, height: 1)
                 screenContextControl(width: width)
+            }
+        }
+        .frame(minHeight: 52)
+    }
+
+    /// Tone & sentiment analysis toggle. Text sentiment always available; references the
+    /// audio-emotion model in Models → Experimental, which enhances analysis when installed.
+    private func sentimentAnalysisRow(_ title: String, controlWidth rowControlWidth: CGFloat? = nil) -> some View {
+        let width = rowControlWidth ?? controlWidth
+        let audioInstalled = SpeechEmotionBackend.isModelInstalled
+        let description = audioInstalled
+            ? "Analyzes each speaker's tone and sentiment from the transcript and voice. The wav2vec2 Emotion model is installed, so tone is enhanced with audio analysis."
+            : "Analyzes each speaker's tone and sentiment from the transcript. Install the wav2vec2 Emotion model in Models → Experimental to enhance it with audio (voice) analysis."
+        return HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(MuesliTheme.body())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(description)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 20)
+
+            ZStack(alignment: .trailing) {
+                Color.clear.frame(width: width, height: 1)
+                settingsSwitch(isOn: appState.config.enableProsodyAffect) { newValue in
+                    controller.setProsodyAffectEnabled(newValue)
+                }
             }
         }
         .frame(minHeight: 52)
@@ -726,6 +760,8 @@ struct SettingsView: View {
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
                 screenContextRow("Meeting context")
+                Divider().background(MuesliTheme.surfaceBorder)
+                sentimentAnalysisRow("Tone & sentiment analysis")
             }
 
             settingsSection("Meeting Summaries") {

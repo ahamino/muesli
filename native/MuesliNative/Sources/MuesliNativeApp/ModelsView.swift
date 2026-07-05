@@ -1,5 +1,6 @@
 import SwiftUI
 import MuesliCore
+import ProsodyKit
 
 struct ModelsView: View {
     let appState: AppState
@@ -23,6 +24,13 @@ struct ModelsView: View {
     @State private var postProcModelToDelete: PostProcessorOption?
     @State private var isEditingSystemPrompt: Bool = false
     @State private var editedSystemPrompt: String
+
+    // Prosody / affect model state
+    @State private var prosodyModelInstalled: Bool = false
+    @State private var isDownloadingProsodyModel: Bool = false
+    @State private var prosodyDownloadProgress: Double = 0
+    @State private var prosodyDownloadTask: Task<Void, Never>?
+    @State private var showProsodyDeleteAlert: Bool = false
 
     init(appState: AppState, controller: MuesliController) {
         self.appState = appState
@@ -96,6 +104,7 @@ struct ModelsView: View {
         .onAppear {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
+            prosodyModelInstalled = SpeechEmotionBackend.isModelInstalled
             syncSelectionsFromActiveBackend()
             checkNemotron35Update()
         }
@@ -137,6 +146,17 @@ struct ModelsView: View {
             }
         } message: {
             Text("The downloaded model files will be removed from this Mac. You can download the model again later.")
+        }
+        .alert(
+            "Delete Prosody / Affect model?",
+            isPresented: $showProsodyDeleteAlert
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                deleteProsodyModel()
+            }
+        } message: {
+            Text("The downloaded model files (~631 MB) will be removed from this Mac. Meeting notes will fall back to text-only tone analysis. You can download the model again later.")
         }
     }
 
@@ -182,6 +202,8 @@ struct ModelsView: View {
                     ForEach(BackendOption.experimental, id: \.model) { option in
                         modelCard(option: option, logo: logoForBackend(option))
                     }
+
+                    prosodyModelCard
                 }
             }
         }
@@ -241,6 +263,150 @@ struct ModelsView: View {
 
             systemPromptCard
         }
+    }
+
+    private var prosodyModelCard: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Text("wav2vec2 Emotion")
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+
+                        Text("~631 MB")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                    }
+
+                    Text("Voice-emotion (dimensional valence/arousal/dominance) model fused with word sentiment to surface delivery and tone-vs-words signals in notes.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+
+                    Link(destination: AudioValenceModelInstaller.huggingFaceURL) {
+                        Text("CC BY-NC-SA 4.0 · research/non-commercial · audEERING")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.accent)
+                    }
+                    .padding(.top, 2)
+                }
+
+                Spacer()
+
+                if prosodyModelInstalled {
+                    Text("Installed")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.success)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.success.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            if isDownloadingProsodyModel {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: prosodyDownloadProgress)
+                        .tint(MuesliTheme.accent)
+                    Text("\(Int(prosodyDownloadProgress * 100))% downloading...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                }
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                if isDownloadingProsodyModel {
+                    Button("Cancel") {
+                        cancelProsodyDownload()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                } else if prosodyModelInstalled {
+                    Button {
+                        showProsodyDeleteAlert = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.6))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button("Download") {
+                        startProsodyDownload()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing16)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private func startProsodyDownload() {
+        withAnimation { isDownloadingProsodyModel = true }
+        prosodyDownloadProgress = 0.02
+        let task = Task {
+            do {
+                try await AudioValenceModelInstaller.downloadModel { fraction in
+                    DispatchQueue.main.async {
+                        prosodyDownloadProgress = max(fraction, 0.02)
+                    }
+                }
+                await MainActor.run {
+                    withAnimation {
+                        isDownloadingProsodyModel = false
+                        prosodyModelInstalled = SpeechEmotionBackend.isModelInstalled
+                        prosodyDownloadProgress = 0
+                        prosodyDownloadTask = nil
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    withAnimation {
+                        isDownloadingProsodyModel = false
+                        prosodyDownloadProgress = 0
+                        prosodyDownloadTask = nil
+                        prosodyModelInstalled = SpeechEmotionBackend.isModelInstalled
+                    }
+                }
+                let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+                if !isCancelled {
+                    fputs("[muesli-native] Prosody/affect model download failed: \(error)\n", stderr)
+                }
+            }
+        }
+        prosodyDownloadTask = task
+    }
+
+    private func cancelProsodyDownload() {
+        prosodyDownloadTask?.cancel()
+        withAnimation {
+            isDownloadingProsodyModel = false
+            prosodyDownloadProgress = 0
+            prosodyDownloadTask = nil
+        }
+    }
+
+    private func deleteProsodyModel() {
+        try? AudioValenceModelInstaller.deleteModel()
+        prosodyModelInstalled = SpeechEmotionBackend.isModelInstalled
     }
 
     private func postProcModelCard(_ option: PostProcessorOption) -> some View {

@@ -3,6 +3,7 @@ import AVFoundation
 import FluidAudio
 import Foundation
 import MuesliCore
+import ProsodyKit
 import UniformTypeIdentifiers
 
 /// Handles importing audio files (m4a, mp4, wav, mp3) for offline transcription.
@@ -197,6 +198,7 @@ enum AudioFileImportController {
 
         // Run speaker diarization if available
         var diarizedTranscript = rawTranscript
+        var diarizationSegments: [TimedSpeakerSegment] = []
         if let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
            diarizerManager.isAvailable {
             progress("Identifying speakers...")
@@ -209,6 +211,7 @@ enum AudioFileImportController {
                     sampleRate: 16000
                 )
                 if !diarizationResult.segments.isEmpty {
+                    diarizationSegments = diarizationResult.segments
                     diarizedTranscript = formatTranscriptWithSpeakers(
                         transcription: transcription,
                         diarizationSegments: diarizationResult.segments,
@@ -220,6 +223,77 @@ enum AudioFileImportController {
             } catch {
                 fputs("[import] diarization failed, using raw transcript: \(error)\n", stderr)
             }
+        }
+
+        try Task.checkCancellation()
+
+        // Prosody & affect (gated on the user setting, default on). Import has a SINGLE
+        // audio file with every speaker diarized from it — there is no You/Others split —
+        // so all speakers are sliced from `wavURL` via diarization (micURL: nil,
+        // micSegments: []). This MUST run before the `wavURL` defer above deletes the
+        // file. The audio-emotion portion only runs when the model is installed;
+        // otherwise it degrades to text-only fusion (VADER + acoustic), never failing
+        // the import.
+        var prosodyReport: ProsodyReport?
+        var prosodyContext: String?
+        if config.enableProsodyAffect {
+            progress("Analyzing tone & sentiment…")
+            let speechSegments = transcription.segments.filter {
+                !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            let diarSegments = diarizationSegments.isEmpty ? nil : diarizationSegments
+            // Adapt FluidAudio segments → ProsodyKit DTOs (keeps the analyzer free of
+            // the FluidAudio dependency). Imports have no You/Others split, so all
+            // speakers are sliced from the single file via diarization (micSegments: []).
+            let systemDTO = speechSegments.map {
+                TranscribedSegment(text: $0.text, start: $0.start, end: $0.end)
+            }
+            let diarDTO = diarSegments?.map {
+                SpeakerSpan(speaker: $0.speakerId, start: Double($0.startTimeSeconds), end: Double($0.endTimeSeconds))
+            }
+            // Resample the WAV to 16 kHz mono here (FluidAudio lives in the app) and
+            // hand the analyzers plain samples, so ProsodyKit needs no audio-file
+            // dependency. Shared by prosody + affect (identical). Missing/unreadable → nil.
+            let systemSamples: [Float]? = try? AudioConverter().resampleAudioFile(wavURL)
+            var report = ProsodyAnalyzer.analyze(
+                micSamples: nil,
+                systemSamples: systemSamples,
+                micSegments: [],
+                systemSegments: systemDTO,
+                diarizationSegments: diarDTO,
+                meetingDurationSeconds: duration
+            )
+            if let base = report {
+                let analysis = await AffectAnalyzer.analyze(
+                    micSamples: nil,
+                    systemSamples: systemSamples,
+                    micSegments: [],
+                    systemSegments: systemDTO,
+                    diarizationSegments: diarDTO
+                )
+                let deliveryReads = Dictionary(
+                    base.speakers.map { ($0.speaker, $0.deliveryRead) },
+                    uniquingKeysWith: { a, _ in a }
+                )
+                let pitchRanges = Dictionary(
+                    base.speakers.compactMap { spk in spk.pitchRange.map { (spk.speaker, $0) } },
+                    uniquingKeysWith: { a, _ in a }
+                )
+                let annotations = AnnotationBuilder.build(
+                    units: analysis.annotationUnits,
+                    deliveryReadBySpeaker: deliveryReads,
+                    pitchRangeBySpeaker: pitchRanges
+                )
+                report = base
+                    .withAffect(analysis.affect)
+                    .withAnnotations(annotations.isEmpty ? nil : annotations)
+                fputs("[import] affect speakers=\(analysis.affect?.speakers.count ?? 0) weightAudio=\(analysis.affect?.weightAudio ?? 0) annotations=\(annotations.count)\n", stderr)
+            }
+            prosodyReport = report
+            prosodyContext = report.flatMap { ProsodyContextBuilder.render($0) }
+            fputs("[import] prosody speakers=\(prosodyReport?.speakers.count ?? 0) contextChars=\(prosodyContext?.count ?? 0)\n", stderr)
+        } else {
+            fputs("[import] prosody & affect disabled by user setting; skipping\n", stderr)
         }
 
         try Task.checkCancellation()
@@ -246,7 +320,8 @@ enum AudioFileImportController {
                 config: config,
                 template: templateSnapshot,
                 existingNotes: nil,
-                manualNotesToRetain: ""
+                manualNotesToRetain: "",
+                prosodyContext: prosodyContext
             )
         } catch {
             fputs("[import] summary generation failed: \(error)\n", stderr)
@@ -266,6 +341,7 @@ enum AudioFileImportController {
         progress("Saving...")
         let now = Date()
         let startTime = now.addingTimeInterval(-duration)
+        let prosodyJSON = prosodyReport?.encodedJSON()
         let meetingID = try await controller.persistImportedAudioMeeting(
             title: generatedTitle,
             calendarEventID: nil,
@@ -279,7 +355,8 @@ enum AudioFileImportController {
             selectedTemplateID: templateSnapshot.id,
             selectedTemplateName: templateSnapshot.name,
             selectedTemplateKind: templateSnapshot.kind,
-            selectedTemplatePrompt: templateSnapshot.prompt
+            selectedTemplatePrompt: templateSnapshot.prompt,
+            prosodyJSON: prosodyJSON
         )
 
         return ImportResult(

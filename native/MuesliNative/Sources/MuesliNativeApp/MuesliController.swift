@@ -6,6 +6,7 @@ import Foundation
 import Sparkle
 import TelemetryDeck
 import MuesliCore
+import ProsodyKit
 import os
 
 private enum DictationOutputMode {
@@ -1740,6 +1741,12 @@ final class MuesliController: NSObject {
         preloadExperimentalTranscriptionFeatures()
     }
 
+    /// Enable/disable prosody & affect enhancement of meeting notes. Persisted;
+    /// gated in `MeetingSession.stop()`. Default on.
+    func setProsodyAffectEnabled(_ enabled: Bool) {
+        updateConfig { $0.enableProsodyAffect = enabled }
+    }
+
     func preloadExperimentalTranscriptionFeatures() {
         let ppOption = runtimePostProcessorOption()
         let enabled = config.enablePostProcessor && ppOption != nil
@@ -3328,7 +3335,10 @@ final class MuesliController: NSObject {
                     config: self.config,
                     template: templateSnapshot,
                     existingNotes: self.notesContextForResummary(meeting),
-                    manualNotesToRetain: meeting.manualNotes
+                    manualNotesToRetain: meeting.manualNotes,
+                    // Re-summary reuses the persisted prosody report (the mic WAV is
+                    // gone) so the regenerated notes keep the delivery/affect signal.
+                    prosodyContext: meeting.prosodyReport.flatMap { ProsodyContextBuilder.render($0) }
                 )
                 try self.dictationStore.updateMeetingSummary(
                     id: meeting.id,
@@ -3411,7 +3421,10 @@ final class MuesliController: NSObject {
                         config: self.config,
                         template: templateSnapshot,
                         existingNotes: self.notesContextForResummary(meeting),
-                        manualNotesToRetain: meeting.manualNotes
+                        manualNotesToRetain: meeting.manualNotes,
+                        // Reuse the persisted prosody report; re-transcription does not
+                        // recompute prosody (the source audio slicing isn't rerun here).
+                        prosodyContext: meeting.prosodyReport.flatMap { ProsodyContextBuilder.render($0) }
                     )
                 } catch {
                     fputs("[muesli-native] re-transcription summary generation failed: \(error)\n", stderr)
@@ -4438,7 +4451,8 @@ final class MuesliController: NSObject {
         selectedTemplateID: String?,
         selectedTemplateName: String?,
         selectedTemplateKind: MeetingTemplateKind?,
-        selectedTemplatePrompt: String?
+        selectedTemplatePrompt: String?,
+        prosodyJSON: String? = nil
     ) throws -> Int64 {
         let meetingID = try dictationStore.insertMeeting(
             title: title,
@@ -4454,7 +4468,8 @@ final class MuesliController: NSObject {
             selectedTemplateName: selectedTemplateName,
             selectedTemplateKind: selectedTemplateKind,
             selectedTemplatePrompt: selectedTemplatePrompt,
-            source: .audioImport
+            source: .audioImport,
+            prosodyJSON: prosodyJSON
         )
         scheduleICloudSyncAfterLocalChange()
         return meetingID
@@ -5195,6 +5210,7 @@ final class MuesliController: NSObject {
         let meetingID: Int64
         let savedRecordingPath = preparedRecordingSave.path
         let recordingSaveError = preparedRecordingSave.error
+        let prosodyJSON = result.prosodyReport?.encodedJSON()
 
         if let existingMeetingID {
             let persistedTitle = completedLiveMeetingTitle(for: result, existingMeetingID: existingMeetingID)
@@ -5216,7 +5232,8 @@ final class MuesliController: NSObject {
                 selectedTemplateID: result.templateSnapshot.id,
                 selectedTemplateName: result.templateSnapshot.name,
                 selectedTemplateKind: result.templateSnapshot.kind,
-                selectedTemplatePrompt: result.templateSnapshot.prompt
+                selectedTemplatePrompt: result.templateSnapshot.prompt,
+                prosodyJSON: prosodyJSON
             )
             meetingID = existingMeetingID
             clearCachedMeetingManualNotes(id: existingMeetingID)
@@ -5235,7 +5252,8 @@ final class MuesliController: NSObject {
                 selectedTemplateID: result.templateSnapshot.id,
                 selectedTemplateName: result.templateSnapshot.name,
                 selectedTemplateKind: result.templateSnapshot.kind,
-                selectedTemplatePrompt: result.templateSnapshot.prompt
+                selectedTemplatePrompt: result.templateSnapshot.prompt,
+                prosodyJSON: prosodyJSON
             )
         }
         scheduleICloudSyncAfterLocalChange()
@@ -5343,7 +5361,10 @@ final class MuesliController: NSObject {
                 template: result.templateSnapshot,
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
-                visualContext: nil
+                visualContext: nil,
+                // Reuse the original meeting's persisted prosody so the regenerated
+                // resume summary keeps the delivery/affect signal.
+                prosodyContext: originalMeeting?.prosodyReport.flatMap { ProsodyContextBuilder.render($0) }
             )
         } catch {
             fputs("[muesli-native] resume summary regeneration failed: \(error.localizedDescription)\n", stderr)
@@ -5957,6 +5978,8 @@ final class MuesliController: NSObject {
             setMeetingProcessingStatus("Cleaning")
         case .generatingTitle:
             setMeetingProcessingStatus("Titling")
+        case .analyzingProsody:
+            setMeetingProcessingStatus("Analyzing tone & sentiment…")
         case .summarizingNotes:
             setMeetingProcessingStatus("Summarizing")
         }

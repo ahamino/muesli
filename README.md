@@ -34,6 +34,9 @@ Start a meeting recording → Muesli captures your mic (You) and system audio (O
 
 ---
 
+### Prosody & Affect (Experimental)
+Beyond *what* was said, Muesli can analyze *how* it was said. When a meeting ends, it derives per-speaker prosody (pace, pitch variation, pauses, filler rate, and an assertive/tentative delivery read) and conversation dynamics directly from the separate You/Others audio — no cloud, no extra recording. With the optional on-device emotion model it also computes per-speaker vocal **valence** and flags **tone-vs-words mismatches**, so hesitation, conviction, and unspoken concern surface in the summary. These signals are folded into the AI meeting notes. Enable it under **Models → Prosody & Affect**; the base analysis (and VADER text sentiment) needs nothing downloaded.
+
 ## Features
 
 - **Native Swift, zero Python** — Pure Swift app with CoreML and Metal backends. No bundled runtimes, no subprocess IPC.
@@ -52,6 +55,7 @@ Start a meeting recording → Muesli captures your mic (You) and system audio (O
 - **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
 - **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
+- **Prosody & affect analysis** *(Experimental)* — Per-speaker acoustic analysis (pace, pitch variation, pauses, filler rate, assertive-vs-tentative delivery) and turn-taking dynamics (talk-share, interruptions, monologues), woven into the AI meeting notes. With the optional on-device emotion model, adds per-speaker vocal valence and **tone-vs-words mismatch** detection ("said it was fine, but sounded uneasy"). The base analysis and text-sentiment layer (VADER) need no download.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
 - **Computer Use planner** — Optional voice-driven planner that can execute local app and browser actions from dictated commands with configurable model and timeout settings.
 - **Post-meeting hooks** — Run a user-supplied executable after completed meetings. Hooks receive a JSON payload on stdin and log results in the app support directory.
@@ -236,6 +240,8 @@ Meeting echo cancellation uses the bundled LocalVQE `localvqe-v1.2-1.3M-f32.gguf
 
 Models download on demand from HuggingFace. Manage them from the **Models** tab in the dashboard.
 
+**Prosody & Affect (Experimental)** — an optional on-device emotion model ([`ahamino/wav2vec2-msp-dim-emotion-coreml`](https://huggingface.co/ahamino/wav2vec2-msp-dim-emotion-coreml), ~631 MB, Core ML / Neural Engine) adds per-speaker vocal valence and tone-vs-words mismatch detection to meeting notes. Download it from **Models → Prosody & Affect**, or leave it out — the rest of the prosody analysis (pace, pitch, pauses, fillers, delivery, dynamics, and VADER text sentiment) is pure-Swift and always available. The model is a Core ML conversion of audEERING's dimensional-emotion model, licensed **CC BY-NC-SA 4.0 (research / non-commercial)** — see [License](#license).
+
 ---
 
 ## Permissions
@@ -333,12 +339,16 @@ Muesli has been possible because of the generosity of companies such as:
 - [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) — Multilingual speech recognition (52 languages)
 - [AI4Bharat IndicASR](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual) — IndicConformer multilingual ASR model for Indian languages
 - [pyannote](https://github.com/pyannote/pyannote-audio) — Speaker diarization (via FluidAudio CoreML conversion)
+- [audEERING wav2vec2 dimensional emotion](https://huggingface.co/audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim) — speech valence/arousal/dominance for the optional Prosody & Affect model (Core ML conversion; CC BY-NC-SA 4.0; Wagner et al., [arXiv:2203.07378](https://arxiv.org/abs/2203.07378))
+- [VADER Sentiment](https://github.com/cjhutto/vaderSentiment) — lexicon-based text sentiment (ported to Swift for prosody text valence)
 
 ---
 
 ## License
 
 [MIT](LICENSE) — free and open source.
+
+The optional **Prosody & Affect** emotion model is a derivative of [audEERING's dimensional-emotion model](https://huggingface.co/audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim) and is licensed separately under **CC BY-NC-SA 4.0 (research / non-commercial use only)**. It is downloaded on demand and is **not** bundled with the app, so the app itself remains MIT. Commercial use of that model requires a separate license from audEERING.
 
 ---
 
