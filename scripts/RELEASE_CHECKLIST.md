@@ -16,6 +16,7 @@ This checklist is for **verification** after the script runs, and for manual rec
 - [ ] `swift test --package-path native/MuesliNative` — all tests pass
 - [ ] Version bumped in `scripts/build_native_app.sh` (CFBundleVersion + CFBundleShortVersionString)
 - [ ] No uncommitted changes (`git status` clean)
+- [ ] Homebrew installed and updated enough to run post-release `brew livecheck --cask muesli`
 
 ## Signing Profiles
 

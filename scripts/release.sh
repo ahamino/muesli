@@ -26,6 +26,7 @@ set -euo pipefail
 #       MUESLI_PROVISIONING_PROFILE=/path/to/profile.provisionprofile
 #   - Notary profile stored: xcrun notarytool store-credentials MuesliNotary
 #   - gh CLI authenticated
+#   - Homebrew installed for post-release cask livecheck/autobump verification
 #
 # Usage: ./scripts/release.sh [version]
 #   e.g.: ./scripts/release.sh 0.5.0
@@ -140,9 +141,13 @@ verify_homebrew_autobump() {
   fi
 
   echo "  Verifying official Homebrew cask livecheck for ${HOMEBREW_CASK}..."
-  brew livecheck --cask "$HOMEBREW_CASK"
-  brew bump --cask --no-pull-requests "$HOMEBREW_CASK"
-  echo "  BrewTestBot owns ${HOMEBREW_CASK} version bumps and should open a PR automatically."
+  if ! brew livecheck --cask "$HOMEBREW_CASK"; then
+    echo "  WARNING: Homebrew livecheck failed; check ${HOMEBREW_CASK} manually." >&2
+  fi
+  if ! brew bump --cask --no-pull-requests "$HOMEBREW_CASK"; then
+    echo "  WARNING: Homebrew autobump verification failed; check ${HOMEBREW_CASK} manually." >&2
+  fi
+  echo "  BrewTestBot should open ${HOMEBREW_CASK} version bump PRs automatically."
 }
 
 echo "=== Muesli Release v${VERSION} ==="
