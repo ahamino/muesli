@@ -22,11 +22,16 @@ let package = Package(
         .package(url: "https://github.com/TelemetryDeck/SwiftSDK", from: "2.0.0"),
         .package(url: "https://github.com/MimicScribe/dtln-aec-coreml.git", from: "0.4.0-beta"),
         .package(url: "https://github.com/apple/swift-atomics.git", from: "1.2.0"),
+        // Prosody/affect analysis + eGeMAPS acoustic features, extracted to a standalone
+        // package (PolyForm Noncommercial — EGeMAPSKit derives from openSMILE).
+        .package(url: "https://github.com/ahamino/swift-prosody.git", from: "0.1.0"),
     ],
     targets: [
         .target(
             name: "MuesliCore",
-            dependencies: [],
+            dependencies: [
+                .product(name: "ProsodyKit", package: "swift-prosody"),
+            ],
             path: "Sources/MuesliCore",
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
@@ -36,6 +41,8 @@ let package = Package(
             name: "MuesliNativeApp",
             dependencies: [
                 "MuesliCore",
+                .product(name: "EGeMAPSKit", package: "swift-prosody"),
+                .product(name: "ProsodyKit", package: "swift-prosody"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
                 .product(name: "WhisperKit", package: "WhisperKit"),
@@ -70,7 +77,10 @@ let package = Package(
         ),
         .testTarget(
             name: "MuesliTests",
-            dependencies: ["MuesliNativeApp", "MuesliCore", "MuesliCLI", "LocalVQEBridge"],
+            dependencies: [
+                "MuesliNativeApp", "MuesliCore", "MuesliCLI", "LocalVQEBridge",
+                .product(name: "ProsodyKit", package: "swift-prosody"),
+            ],
             path: "Tests/MuesliTests",
             linkerSettings: [
                 .linkedLibrary("sqlite3"),

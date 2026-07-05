@@ -110,3 +110,15 @@ context.md
 *~
 .vercel
 docs/reports/meeting-transcription-pipeline.svg
+
+# CoreML model weights — provisioned into ~/.cache/muesli/models at runtime,
+# never committed (e.g. AudioValence.mlpackage ~631 MB). See
+# scripts/provision_audio_valence_model.sh.
+*.mlpackage/
+*.mlpackage
+*.mlmodelc/
+*.mlmodelc
+*.mlmodel
+
+# Test fixture WAV must be tracked despite the global *.wav ignore above.
+!native/MuesliNative/Tests/MuesliTests/Resources/*.wav

@@ -2,6 +2,7 @@ import FluidAudio
 import ApplicationServices
 import Foundation
 import MuesliCore
+import ProsodyKit
 import os
 
 final class MeetingChunkCollector {
@@ -92,6 +93,42 @@ struct MeetingSessionResult {
     let retainedRecordingError: Error?
     let systemRecordingURL: URL?
     let templateSnapshot: MeetingTemplateSnapshot
+    /// Structured prosody metrics computed from the recorded audio + diarization.
+    let prosodyReport: ProsodyReport?
+    /// Rendered markdown block injected into the meeting-notes prompt.
+    let prosodyContext: String?
+
+    init(
+        title: String,
+        originalTitle: String,
+        calendarEventID: String?,
+        startTime: Date,
+        endTime: Date,
+        durationSeconds: Double,
+        rawTranscript: String,
+        formattedNotes: String,
+        retainedRecordingURL: URL?,
+        retainedRecordingError: Error?,
+        systemRecordingURL: URL?,
+        templateSnapshot: MeetingTemplateSnapshot,
+        prosodyReport: ProsodyReport? = nil,
+        prosodyContext: String? = nil
+    ) {
+        self.title = title
+        self.originalTitle = originalTitle
+        self.calendarEventID = calendarEventID
+        self.startTime = startTime
+        self.endTime = endTime
+        self.durationSeconds = durationSeconds
+        self.rawTranscript = rawTranscript
+        self.formattedNotes = formattedNotes
+        self.retainedRecordingURL = retainedRecordingURL
+        self.retainedRecordingError = retainedRecordingError
+        self.systemRecordingURL = systemRecordingURL
+        self.templateSnapshot = templateSnapshot
+        self.prosodyReport = prosodyReport
+        self.prosodyContext = prosodyContext
+    }
 }
 
 extension MeetingSessionResult {
@@ -118,7 +155,9 @@ extension MeetingSessionResult {
             retainedRecordingURL: retainedRecordingURL,
             retainedRecordingError: retainedRecordingError,
             systemRecordingURL: systemRecordingURL,
-            templateSnapshot: templateSnapshot
+            templateSnapshot: templateSnapshot,
+            prosodyReport: prosodyReport,
+            prosodyContext: prosodyContext
         )
     }
 }
@@ -127,6 +166,7 @@ enum MeetingProcessingStage {
     case transcribingAudio
     case cleaningAudio
     case generatingTitle
+    case analyzingProsody
     case summarizingNotes
 }
 
@@ -516,6 +556,79 @@ final class MeetingSession {
             generatedTitle = title
         }
 
+        // Prosody & affect are gated on the user setting (default on). When off,
+        // skip the whole feature — no analysis, no context injection, no wasted
+        // work reslicing the mic WAV. When on, the audio-emotion portion still
+        // only runs if the model is installed; otherwise it degrades to text-only
+        // fusion (VADER + acoustic) with no error.
+        var prosodyReport: ProsodyReport?
+        var prosodyContext: String?
+        if config.enableProsodyAffect {
+            onProgress?(.analyzingProsody)
+            // Prosody analysis MUST run here — the raw mic WAV is deleted by the defer
+            // above once stop() returns, so we analyze while it still exists (after
+            // diarization, before summarization). Segment-level timestamps only.
+            // Adapt FluidAudio segments → ProsodyKit DTOs so the analyzer stays free of
+            // the FluidAudio dependency (see ProsodyKit.TranscribedSegment/SpeakerSpan).
+            let micDTO = protectedTranscriptInputs.micSegments.map {
+                TranscribedSegment(text: $0.text, start: $0.start, end: $0.end)
+            }
+            let systemDTO = protectedTranscriptInputs.systemSegments.map {
+                TranscribedSegment(text: $0.text, start: $0.start, end: $0.end)
+            }
+            let diarDTO = protectedTranscriptInputs.diarizationSegments?.map {
+                SpeakerSpan(speaker: $0.speakerId, start: Double($0.startTimeSeconds), end: Double($0.endTimeSeconds))
+            }
+            // Resample the source files to 16 kHz mono here (FluidAudio lives in the
+            // app) and hand the analyzers plain samples, so ProsodyKit needs no
+            // audio-file dependency. The mic WAV is deleted by the defer above, so this
+            // MUST run while it still exists. Shared by prosody + affect (identical).
+            let micSamples: [Float]? = rawStreamingMicURL.flatMap { try? AudioConverter().resampleAudioFile($0) }
+            let systemSamples: [Float]? = systemAudioURL.flatMap { try? AudioConverter().resampleAudioFile($0) }
+            var report = ProsodyAnalyzer.analyze(
+                micSamples: micSamples,
+                systemSamples: systemSamples,
+                micSegments: micDTO,
+                systemSegments: systemDTO,
+                diarizationSegments: diarDTO,
+                meetingDurationSeconds: max(endTime.timeIntervalSince(meetingStart), 0)
+            )
+            // Affect fusion (Phase 4): must run here too — it reslices the mic WAV that
+            // the defer above deletes once stop() returns. Degrades to text-only fusion
+            // (audio fields nil) when the emotion model isn't installed.
+            if let base = report {
+                let analysis = await AffectAnalyzer.analyze(
+                    micSamples: micSamples,
+                    systemSamples: systemSamples,
+                    micSegments: micDTO,
+                    systemSegments: systemDTO,
+                    diarizationSegments: diarDTO
+                )
+                let deliveryReads = Dictionary(
+                    base.speakers.map { ($0.speaker, $0.deliveryRead) },
+                    uniquingKeysWith: { a, _ in a }
+                )
+                let pitchRanges = Dictionary(
+                    base.speakers.compactMap { spk in spk.pitchRange.map { (spk.speaker, $0) } },
+                    uniquingKeysWith: { a, _ in a }
+                )
+                let annotations = AnnotationBuilder.build(
+                    units: analysis.annotationUnits,
+                    deliveryReadBySpeaker: deliveryReads,
+                    pitchRangeBySpeaker: pitchRanges
+                )
+                report = base
+                    .withAffect(analysis.affect)
+                    .withAnnotations(annotations.isEmpty ? nil : annotations)
+                fputs("[meeting] affect speakers=\(analysis.affect?.speakers.count ?? 0) weightAudio=\(analysis.affect?.weightAudio ?? 0) annotations=\(annotations.count)\n", stderr)
+            }
+            prosodyReport = report
+            prosodyContext = report.flatMap { ProsodyContextBuilder.render($0) }
+            fputs("[meeting] prosody speakers=\(prosodyReport?.speakers.count ?? 0) contextChars=\(prosodyContext?.count ?? 0)\n", stderr)
+        } else {
+            fputs("[meeting] prosody & affect disabled by user setting; skipping\n", stderr)
+        }
+
         let visualContext = await screenContextCollector.stopAndDrain()
         Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
         fputs("[meeting] visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
@@ -530,7 +643,8 @@ final class MeetingSession {
                 template: templateSnapshot,
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
-                visualContext: visualContext.isEmpty ? nil : visualContext
+                visualContext: visualContext.isEmpty ? nil : visualContext,
+                prosodyContext: prosodyContext
             )
         } catch {
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
@@ -571,7 +685,9 @@ final class MeetingSession {
             retainedRecordingURL: retainedRecordingURL,
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
-            templateSnapshot: templateSnapshot
+            templateSnapshot: templateSnapshot,
+            prosodyReport: prosodyReport,
+            prosodyContext: prosodyContext
         )
     }
 

@@ -1027,6 +1027,7 @@ struct AppConfig: Codable {
     var activeTranscriptCleanupPromptId: String = TranscriptCleanupPrompts.defaultID
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
+    var enableProsodyAffect: Bool = true
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
@@ -1137,6 +1138,7 @@ struct AppConfig: Codable {
         case activeTranscriptCleanupPromptId = "active_transcript_cleanup_prompt_id"
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
+        case enableProsodyAffect = "enable_prosody_affect"
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
@@ -1307,6 +1309,7 @@ struct AppConfig: Codable {
             activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
+        enableProsodyAffect = (try? c.decode(Bool.self, forKey: .enableProsodyAffect)) ?? defaults.enableProsodyAffect
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
