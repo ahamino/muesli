@@ -27,7 +27,7 @@ public final class DictationStore {
     t.id, t.final_status, t.final_message, t.trace_json, t.created_at
     """
     private static let meetingColumns = """
-    id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source
+    id, title, start_time, duration_seconds, raw_transcript, formatted_notes, word_count, folder_id, calendar_event_id, mic_audio_path, system_audio_path, saved_recording_path, meeting_status, manual_notes, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, prosody_json
     """
 
     public init() {
@@ -101,6 +101,7 @@ public final class DictationStore {
             selected_template_kind TEXT,
             selected_template_prompt TEXT,
             source TEXT NOT NULL DEFAULT 'meeting',
+            prosody_json TEXT,
             updated_at REAL NOT NULL DEFAULT 0,
             deleted_at REAL,
             cloud_record_name TEXT,
@@ -176,6 +177,9 @@ public final class DictationStore {
             // Column may already exist.
         }
         if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'meeting'", nil, nil, nil) != SQLITE_OK {
+            // Column may already exist.
+        }
+        if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN prosody_json TEXT", nil, nil, nil) != SQLITE_OK {
             // Column may already exist.
         }
         if sqlite3_exec(db, "ALTER TABLE dictations ADD COLUMN source TEXT NOT NULL DEFAULT 'dictation'", nil, nil, nil) != SQLITE_OK {
@@ -606,15 +610,16 @@ public final class DictationStore {
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
-        source: MeetingSource = .meeting
+        source: MeetingSource = .meeting,
+        prosodyJSON: String? = nil
     ) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
         let sql = """
         INSERT INTO meetings
-        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, updated_at, sync_dirty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        (title, calendar_event_id, start_time, end_time, duration_seconds, raw_transcript, formatted_notes, mic_audio_path, system_audio_path, saved_recording_path, word_count, selected_template_id, selected_template_name, selected_template_kind, selected_template_prompt, source, prosody_json, updated_at, sync_dirty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -643,7 +648,8 @@ public final class DictationStore {
         bindOptionalText(selectedTemplateKind?.rawValue, at: 14, statement: statement)
         bindOptionalText(selectedTemplatePrompt, at: 15, statement: statement)
         sqlite3_bind_text(statement, 16, (source.rawValue as NSString).utf8String, -1, nil)
-        sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
+        bindOptionalText(prosodyJSON, at: 17, statement: statement)
+        sqlite3_bind_double(statement, 18, Date().timeIntervalSince1970)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
@@ -1219,13 +1225,14 @@ public final class DictationStore {
         selectedTemplateID: String? = nil,
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
-        selectedTemplatePrompt: String? = nil
+        selectedTemplatePrompt: String? = nil,
+        prosodyJSON: String? = nil
     ) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
         let sql = """
         UPDATE meetings
-        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, updated_at = ?, sync_dirty = 1
+        SET title = ?, calendar_event_id = ?, start_time = ?, end_time = ?, duration_seconds = ?, raw_transcript = ?, formatted_notes = ?, mic_audio_path = ?, system_audio_path = ?, saved_recording_path = ?, meeting_status = ?, word_count = ?, selected_template_id = ?, selected_template_name = ?, selected_template_kind = ?, selected_template_prompt = ?, prosody_json = ?, updated_at = ?, sync_dirty = 1
         WHERE id = ?
         """
         var statement: OpaquePointer?
@@ -1257,8 +1264,9 @@ public final class DictationStore {
         bindOptionalText(selectedTemplateName, at: 14, statement: statement)
         bindOptionalText(selectedTemplateKind?.rawValue, at: 15, statement: statement)
         bindOptionalText(selectedTemplatePrompt, at: 16, statement: statement)
-        sqlite3_bind_double(statement, 17, Date().timeIntervalSince1970)
-        sqlite3_bind_int64(statement, 18, id)
+        bindOptionalText(prosodyJSON, at: 17, statement: statement)
+        sqlite3_bind_double(statement, 18, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 19, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -2013,7 +2021,7 @@ public final class DictationStore {
         let meetingSQL = """
         SELECT cloud_record_name, title, raw_transcript, formatted_notes, manual_notes,
                start_time, duration_seconds, word_count, source, meeting_status,
-               updated_at, deleted_at, cloud_change_tag
+               updated_at, deleted_at, cloud_change_tag, prosody_json
         FROM meetings
         WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
           AND meeting_status NOT IN (?, ?)
@@ -2114,7 +2122,7 @@ public final class DictationStore {
         let meetingSQL = """
         SELECT cloud_record_name, title, raw_transcript, formatted_notes, manual_notes,
                start_time, duration_seconds, word_count, source, meeting_status,
-               updated_at, deleted_at, cloud_change_tag
+               updated_at, deleted_at, cloud_change_tag, prosody_json
         FROM meetings
         WHERE cloud_record_name IS NOT NULL
         ORDER BY updated_at DESC, id DESC
@@ -2353,6 +2361,7 @@ public final class DictationStore {
             text: rawTranscript,
             summaryText: optionalStringColumn(statement, index: 3),
             manualNotes: optionalStringColumn(statement, index: 4),
+            prosodyJSON: optionalStringColumn(statement, index: 13),
             source: source,
             localSource: localSource,
             meetingStatus: meetingStatus,
@@ -2550,9 +2559,9 @@ public final class DictationStore {
             raw_transcript, formatted_notes, mic_audio_path, system_audio_path,
             saved_recording_path, meeting_status, manual_notes, word_count, source,
             updated_at, deleted_at, cloud_record_name, cloud_change_tag,
-            last_synced_at, sync_dirty
+            last_synced_at, prosody_json, sync_dirty
         )
-        VALUES (?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(cloud_record_name) DO UPDATE SET
             title = excluded.title,
             start_time = excluded.start_time,
@@ -2568,6 +2577,7 @@ public final class DictationStore {
             deleted_at = excluded.deleted_at,
             cloud_change_tag = excluded.cloud_change_tag,
             last_synced_at = excluded.last_synced_at,
+            prosody_json = excluded.prosody_json,
             sync_dirty = 0
         WHERE excluded.updated_at > meetings.updated_at
            OR (excluded.updated_at = meetings.updated_at AND meetings.sync_dirty = 0)
@@ -2595,6 +2605,7 @@ public final class DictationStore {
         sqlite3_bind_text(statement, 13, (record.id as NSString).utf8String, -1, nil)
         bindOptionalText(record.cloudChangeTag, at: 14, statement: statement)
         sqlite3_bind_double(statement, 15, Date().timeIntervalSince1970)
+        bindOptionalText(record.prosodyJSON, at: 16, statement: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }
@@ -2660,6 +2671,7 @@ public final class DictationStore {
             : MeetingTemplateKind(rawValue: stringColumn(statement, index: 16))
         let selectedTemplatePrompt: String? = sqlite3_column_type(statement, 17) == SQLITE_NULL ? nil : stringColumn(statement, index: 17)
         let source = MeetingSource(rawValue: stringColumn(statement, index: 18)) ?? .meeting
+        let prosodyJSON: String? = sqlite3_column_type(statement, 19) == SQLITE_NULL ? nil : stringColumn(statement, index: 19)
         return MeetingRecord(
             id: sqlite3_column_int64(statement, 0),
             title: stringColumn(statement, index: 1),
@@ -2679,7 +2691,8 @@ public final class DictationStore {
             selectedTemplateName: selectedTemplateName,
             selectedTemplateKind: selectedTemplateKind,
             selectedTemplatePrompt: selectedTemplatePrompt,
-            source: source
+            source: source,
+            prosodyJSON: prosodyJSON
         )
     }
 

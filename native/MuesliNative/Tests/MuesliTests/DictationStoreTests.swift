@@ -510,6 +510,36 @@ struct DictationStoreTests {
         #expect(imported.source == .audioImport)
     }
 
+    @Test("prosody_json round-trips through the meeting sync record and cross-device apply")
+    func prosodyJSONRoundTripsThroughSync() throws {
+        let sourceStore = try makeStore()
+        let targetStore = try makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let prosody = #"{"schemaVersion":4,"speakers":[]}"#
+
+        try sourceStore.insertMeeting(
+            title: "Prosody Meeting",
+            calendarEventID: nil,
+            startTime: startedAt,
+            endTime: startedAt.addingTimeInterval(90),
+            rawTranscript: "Transcript with tone",
+            formattedNotes: "Notes",
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            prosodyJSON: prosody
+        )
+
+        // Read side: the dirty sync record carries the prosody payload.
+        let outbound = try #require(try sourceStore.textRecordsNeedingSync().first { $0.kind == .meeting })
+        #expect(outbound.prosodyJSON == prosody)
+
+        // Apply side: the remote payload lands on the meetings row cross-device.
+        let applied = try targetStore.upsertSyncedTextRecord(outbound)
+        #expect(applied)
+        let imported = try #require(try targetStore.recentMeetings(limit: 1).first)
+        #expect(imported.prosodyJSON == prosody)
+    }
+
     @Test("migration repairs macOS-origin meeting source corrupted by stale iOS CloudKit metadata")
     func migrationRepairsMacOriginMeetingSource() throws {
         let store = try makeStore()
@@ -908,8 +938,29 @@ struct DictationStoreTests {
         #expect(cloud["speakerTranscript"] == nil)
         #expect(cloud["summaryText"] == nil)
         #expect(cloud["manualNotes"] == nil)
+        #expect(cloud["prosodyJSON"] == nil)
         let changedKeys = Set(cloud.changedKeys())
-        #expect(changedKeys.isSuperset(of: ["title", "text", "speakerTranscript", "summaryText", "manualNotes"]))
+        #expect(changedKeys.isSuperset(of: ["title", "text", "speakerTranscript", "summaryText", "manualNotes", "prosodyJSON"]))
+    }
+
+    @Test("sync cloud record carries prosodyJSON for a non-deleted meeting")
+    func syncCloudRecordCarriesProsodyJSON() throws {
+        let updatedAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let prosody = #"{"schemaVersion":4,"speakers":[]}"#
+        let cloud = MuesliICloudSyncEngine.syncZoneCloudRecord(from: SyncTextRecord(
+            id: "meeting-with-prosody",
+            kind: .meeting,
+            title: "Toned meeting",
+            text: "Transcript",
+            prosodyJSON: prosody,
+            source: "macos",
+            meetingStatus: .completed,
+            createdAt: updatedAt.addingTimeInterval(-120),
+            updatedAt: updatedAt,
+            durationSeconds: 120,
+            wordCount: 1
+        ))
+        #expect(cloud["prosodyJSON"] as? String == prosody)
     }
 
     @Test("sync cloud record can update an existing server record")
