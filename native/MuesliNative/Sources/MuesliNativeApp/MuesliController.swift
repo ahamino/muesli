@@ -5737,6 +5737,7 @@ final class MuesliController: NSObject {
     func cleanupHistoricalMeetingWaveformCacheFilesIfNeeded() {
         guard !config.waveformCacheOrphanCleanupMigrationApplied else { return }
         guard cleanupOrphanedMeetingWaveformCacheFiles() else { return }
+        guard cleanupLegacyJSONMeetingWaveformCacheFiles() else { return }
         config.waveformCacheOrphanCleanupMigrationApplied = true
         appState.config = config
         configStore.save(config)
@@ -5753,6 +5754,16 @@ final class MuesliController: NSObject {
         let recordingURLs = meetings.compactMap { savedRecordingURL(from: $0.savedRecordingPath) }
         let result = RecordingWaveformCacheFiles.sweepOrphanedCachedWaveforms(
             retainedRecordingURLs: recordingURLs,
+            supportDirectory: configStore.supportDirectory()
+        )
+        if case .skipped = result {
+            return false
+        }
+        return true
+    }
+
+    private func cleanupLegacyJSONMeetingWaveformCacheFiles() -> Bool {
+        let result = RecordingWaveformCacheFiles.removeLegacyJSONWaveformCaches(
             supportDirectory: configStore.supportDirectory()
         )
         if case .skipped = result {

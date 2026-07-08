@@ -141,6 +141,36 @@ enum RecordingWaveformCacheFiles {
     }
 
     @discardableResult
+    static func removeLegacyJSONWaveformCaches(
+        supportDirectory: URL = AppIdentity.supportDirectoryURL,
+        fileManager: FileManager = .default,
+        logger: ((String) -> Void)? = { fputs("\($0)\n", stderr) }
+    ) -> SweepResult {
+        let directory = cacheDirectory(supportDirectory: supportDirectory)
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return .completed(removed: 0)
+        }
+
+        var removed = 0
+        for entry in entries where entry.pathExtension.lowercased() == "json" {
+            do {
+                try fileManager.removeItem(at: entry)
+                removed += 1
+            } catch {
+                return .skipped
+            }
+        }
+        if removed > 0 {
+            logger?("[muesli-native] cleaned up \(removed) legacy waveform JSON cache file\(removed == 1 ? "" : "s")")
+        }
+        return .completed(removed: removed)
+    }
+
+    @discardableResult
     static func sweepOrphanedCachedWaveforms(
         retainedRecordingURLs: [URL],
         supportDirectory: URL = AppIdentity.supportDirectoryURL,

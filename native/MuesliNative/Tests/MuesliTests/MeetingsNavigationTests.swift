@@ -361,12 +361,15 @@ struct MeetingsNavigationTests {
             supportDirectory: supportDirectory
         )
         try Data("first-cache".utf8).write(to: firstCacheURL)
+        let firstLegacyJSONURL = firstCacheURL.deletingPathExtension().appendingPathExtension("json")
+        try Data(#"{"peaks":[0.1],"duration":1.0}"#.utf8).write(to: firstLegacyJSONURL)
         try FileManager.default.removeItem(at: firstMissingRecordingURL)
         let controller = makeController(dictationStore: store, configStore: configStore)
 
         controller.cleanupHistoricalMeetingWaveformCacheFilesIfNeeded()
 
         #expect(FileManager.default.fileExists(atPath: firstCacheURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: firstLegacyJSONURL.path) == false)
         #expect(configStore.load().waveformCacheOrphanCleanupMigrationApplied)
 
         let secondMissingRecordingURL = supportDirectory.appendingPathComponent("second-missing.m4a")
@@ -376,12 +379,15 @@ struct MeetingsNavigationTests {
             supportDirectory: supportDirectory
         )
         try Data("second-cache".utf8).write(to: secondCacheURL)
+        let secondLegacyJSONURL = secondCacheURL.deletingPathExtension().appendingPathExtension("json")
+        try Data(#"{"peaks":[0.2],"duration":2.0}"#.utf8).write(to: secondLegacyJSONURL)
         try FileManager.default.removeItem(at: secondMissingRecordingURL)
         let nextLaunchController = makeController(dictationStore: store, configStore: configStore)
 
         nextLaunchController.cleanupHistoricalMeetingWaveformCacheFilesIfNeeded()
 
         #expect(FileManager.default.fileExists(atPath: secondCacheURL.path))
+        #expect(FileManager.default.fileExists(atPath: secondLegacyJSONURL.path))
     }
 
     @Test("deleteMeeting refuses live meeting rows")
