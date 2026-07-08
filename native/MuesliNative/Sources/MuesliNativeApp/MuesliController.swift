@@ -1760,6 +1760,16 @@ final class MuesliController: NSObject {
             normalizeMeetingTranscriptionSelectionForAvailability()
             return
         }
+        if !requireDownloaded {
+            config.meetingTranscriptionBackend = option.backend
+            config.meetingTranscriptionModel = option.model
+            configStore.save(config)
+            selectedMeetingTranscriptionBackend = option
+            appState.selectedMeetingTranscriptionBackend = option
+            appState.config = config
+            activeMeetingSession?.updateBackend(option)
+            return
+        }
         updateConfig {
             $0.meetingTranscriptionBackend = option.backend
             $0.meetingTranscriptionModel = option.model
