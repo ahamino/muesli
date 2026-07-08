@@ -62,11 +62,21 @@ struct LiveTranscriptView: View {
                     }
                 }
             }
-            .onChange(of: partialYou) { _, _ in
-                scrollToBottom(proxy)
+            // Partials update every engine chunk; scrolling on each growth
+            // would yank a user who scrolled up back to the bottom every few
+            // seconds. Scroll only when a tail appears (empty → non-empty);
+            // committed captions keep their existing scroll behavior.
+            .onChange(of: partialYou) { old, new in
+                if old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    scrollToBottom(proxy)
+                }
             }
-            .onChange(of: partialOthers) { _, _ in
-                scrollToBottom(proxy)
+            .onChange(of: partialOthers) { old, new in
+                if old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    scrollToBottom(proxy)
+                }
             }
             .onAppear {
                 // @State is freshly initialized on each tab switch, so this

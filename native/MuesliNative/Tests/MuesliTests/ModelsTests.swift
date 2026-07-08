@@ -547,6 +547,7 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
+        #expect(config.enableLiveStreamingPartials == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -760,6 +761,7 @@ struct AppConfigTests {
         config.postProcessorSystemPrompt = "Preserve labels and quotes."
         config.enableScreenContext = true
         config.enableDictationOCRContext = true
+        config.enableLiveStreamingPartials = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -831,6 +833,7 @@ struct AppConfigTests {
         #expect(decoded.postProcessorSystemPrompt == "Preserve labels and quotes.")
         #expect(decoded.enableScreenContext == true)
         #expect(decoded.enableDictationOCRContext == true)
+        #expect(decoded.enableLiveStreamingPartials == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -975,6 +978,7 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
+        #expect(config.enableLiveStreamingPartials == true)
     }
 
     @Test("meeting summary retry count is clamped on decode")

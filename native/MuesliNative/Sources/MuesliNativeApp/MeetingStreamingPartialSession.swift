@@ -25,6 +25,13 @@ final class MeetingStreamingPartialSession {
     private let chunkSamples: Int
     private let label: String
 
+    /// Backpressure bound: if inference falls behind real time (thermal
+    /// throttling, ANE contention), keep only the freshest chunks so the tail
+    /// snaps back to near-live audio instead of lagging monotonically. The
+    /// dropped audio garbles a couple of words of provisional text — the
+    /// committed captions are unaffected.
+    static let maxQueuedChunks = 3
+
     private struct State {
         var sampleBuffer: [Float] = []
         var chunkQueue: [[Float]] = []
@@ -60,6 +67,9 @@ final class MeetingStreamingPartialSession {
             while s.sampleBuffer.count >= chunkSamples {
                 s.chunkQueue.append(Array(s.sampleBuffer.prefix(chunkSamples)))
                 s.sampleBuffer.removeFirst(chunkSamples)
+            }
+            if s.chunkQueue.count > Self.maxQueuedChunks {
+                s.chunkQueue.removeFirst(s.chunkQueue.count - Self.maxQueuedChunks)
             }
             guard !s.chunkQueue.isEmpty, !s.isDraining else { return false }
             s.isDraining = true

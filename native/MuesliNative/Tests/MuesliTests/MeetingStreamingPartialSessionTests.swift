@@ -28,8 +28,7 @@ struct MeetingStreamingPartialSessionTests {
         session.onPartialUpdate = { collector.record($0) }
 
         session.enqueue([Float](repeating: 0, count: 4))
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(transcriber.transcribeCalls == 0)
+        #expect(await remainsTrue { transcriber.transcribeCalls == 0 })
 
         session.enqueue([Float](repeating: 0, count: 2))
         #expect(await waitUntil { collector.latest == "hello" })
@@ -68,8 +67,7 @@ struct MeetingStreamingPartialSessionTests {
         let updatesBefore = collector.all.count
 
         session.commitSegment()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(collector.all.count == updatesBefore)
+        #expect(await remainsTrue { collector.all.count == updatesBefore })
     }
 
     @available(macOS 15, *)
@@ -87,8 +85,7 @@ struct MeetingStreamingPartialSessionTests {
         #expect(await waitUntil { collector.latest == "" })
 
         session.enqueue([Float](repeating: 0, count: 4))
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(transcriber.transcribeCalls == 1)
+        #expect(await remainsTrue { transcriber.transcribeCalls == 1 })
 
         session.resume()
         session.enqueue([Float](repeating: 0, count: 4))
@@ -108,8 +105,7 @@ struct MeetingStreamingPartialSessionTests {
         let callsAfterFailure = transcriber.transcribeCalls
 
         session.enqueue([Float](repeating: 0, count: 8))
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(transcriber.transcribeCalls == callsAfterFailure)
+        #expect(await remainsTrue { transcriber.transcribeCalls == callsAfterFailure })
     }
 
     @available(macOS 15, *)
@@ -126,9 +122,28 @@ struct MeetingStreamingPartialSessionTests {
         session.stop()
         let updatesBefore = collector.all.count
         session.enqueue([Float](repeating: 0, count: 8))
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(collector.all.count == updatesBefore)
-        #expect(transcriber.transcribeCalls == 1)
+        #expect(await remainsTrue { collector.all.count == updatesBefore && transcriber.transcribeCalls == 1 })
+    }
+
+    @available(macOS 15, *)
+    @Test("backpressure keeps only the freshest queued chunks")
+    func backpressureDropsOldestChunks() async throws {
+        let transcriber = EchoPartialTranscriber()
+        let session = MeetingStreamingPartialSession(transcriber: transcriber, chunkSamples: 4, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+
+        // One enqueue call delivering 7 full chunks: slicing and capping happen
+        // under the same lock acquisition, before the drain task can start, so
+        // only the freshest maxQueuedChunks survive deterministically.
+        var samples: [Float] = []
+        for chunkIndex in 0..<7 {
+            samples.append(contentsOf: [Float](repeating: Float(chunkIndex), count: 4))
+        }
+        session.enqueue(samples)
+
+        #expect(await waitUntil { collector.latest == " c4 c5 c6" })
+        #expect(transcriber.transcribeCalls == MeetingStreamingPartialSession.maxQueuedChunks)
     }
 }
 
@@ -227,6 +242,43 @@ private func makePartialTestStreamState() throws -> RNNTStreamState {
             stripAngleBracketTags: false
         )
     )
+}
+
+@available(macOS 15, *)
+private final class EchoPartialTranscriber: NemotronStreamingTranscribing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _transcribeCalls = 0
+
+    var transcribeCalls: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _transcribeCalls
+    }
+
+    func makeStreamState() async throws -> RNNTStreamState {
+        try makePartialTestStreamState()
+    }
+
+    func transcribeChunk(samples: [Float], state: inout RNNTStreamState) async throws -> String {
+        lock.lock()
+        _transcribeCalls += 1
+        lock.unlock()
+        let marker = samples.first.map { Int($0) } ?? -1
+        return " c\(marker)"
+    }
+}
+
+/// Bounded multi-sample check that `condition` holds for the whole window —
+/// replaces single fixed-sleep negative assertions, which are flake-prone.
+private func remainsTrue(
+    for duration: TimeInterval = 0.2,
+    _ condition: @escaping @Sendable () -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+        if !condition() { return false }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return condition()
 }
 
 private func waitUntil(

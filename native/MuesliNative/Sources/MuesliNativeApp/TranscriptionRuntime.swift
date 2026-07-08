@@ -55,12 +55,16 @@ actor TranscriptionCoordinator {
         return transcriber
     }
 
-    /// The Nemotron 3.5 streaming transcriber for display-only meeting partials:
-    /// loads models already on disk but never downloads them. Returns nil when
-    /// the model isn't downloaded or loading fails — partials silently stay off.
+    /// The Nemotron 3.5 streaming transcriber for display-only meeting partials.
+    /// Partials never force a fresh ANE-resident load: the transcriber is used
+    /// only when this session already created it (Nemotron is the selected
+    /// meeting backend or streaming dictation warmed it). A user who merely has
+    /// the model on disk while running another backend pays nothing. Returns
+    /// nil otherwise — partials silently stay off.
     @available(macOS 15, *)
     func getLoadedNemotron35TranscriberIfDownloaded() async -> Nemotron35StreamingTranscriber? {
         guard BackendOption.nemotron35Multilingual.isDownloaded else { return nil }
+        guard _nemotron35Transcriber != nil else { return nil }
         do {
             return try await getLoadedNemotron35Transcriber()
         } catch {

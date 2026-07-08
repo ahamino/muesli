@@ -178,8 +178,15 @@ final class MeetingSession {
     /// Streaming partial sessions (macOS 15+), type-erased because stored
     /// properties cannot be availability-gated. Lock-guarded: assigned from an
     /// async setup Task, fed on chunkRotationQueue, committed from
-    /// chunk-completion Tasks.
-    private let partialSessionsStorage = OSAllocatedUnfairLock<(mic: Any?, system: Any?)>(initialState: (nil, nil))
+    /// chunk-completion Tasks. `isShutDown` closes the async-setup race: once
+    /// teardown ran, a setup Task that finishes late must not install sessions
+    /// that nothing would ever stop.
+    private struct PartialSessionsStorage {
+        var mic: Any?
+        var system: Any?
+        var isShutDown = false
+    }
+    private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -311,9 +318,17 @@ final class MeetingSession {
             mic.onPartialUpdate = { [weak self] text in self?.onPartialTranscript?("You", text) }
             let system = MeetingStreamingPartialSession(transcriber: transcriber, chunkSamples: chunkSamples, label: "Others")
             system.onPartialUpdate = { [weak self] text in self?.onPartialTranscript?("Others", text) }
-            self.partialSessionsStorage.withLock { s in
+            let installed = self.partialSessionsStorage.withLock { s -> Bool in
+                guard !s.isShutDown else { return false }
                 s.mic = mic
                 s.system = system
+                return true
+            }
+            guard installed else {
+                // Teardown won the race — stop the never-installed sessions.
+                mic.stop()
+                system.stop()
+                return
             }
             fputs("[meeting-partials] streaming partials active (chunkSamples=\(chunkSamples))\n", stderr)
         }
@@ -377,6 +392,7 @@ final class MeetingSession {
             let taken = (s.mic, s.system)
             s.mic = nil
             s.system = nil
+            s.isShutDown = true
             return taken
         }
         (sessions.0 as? MeetingStreamingPartialSession)?.stop()
