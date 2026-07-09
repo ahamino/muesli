@@ -54,15 +54,6 @@
       }
     },
     {
-      "identity" : "swift-prosody",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ahamino/swift-prosody.git",
-      "state" : {
-        "revision" : "d5faaedd030280276204c81b45bcfa56b6a9c77a",
-        "version" : "0.1.0"
-      }
-    },
-    {
       "identity" : "swift-syntax",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-syntax.git",

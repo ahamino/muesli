@@ -1,5 +1,4 @@
 import Foundation
-import ProsodyKit
 
 public enum MeetingNotesState: String, Codable, Sendable {
     case missing
@@ -46,10 +45,6 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
     public var speakerTranscript: String?
     public var summaryText: String?
     public var manualNotes: String?
-    /// JSON-encoded `ProsodyReport` mirrored from the meeting's `prosody_json`
-    /// column so the delivery/affect signal travels cross-device. Nil for
-    /// dictations / meetings without a report.
-    public var prosodyJSON: String?
     public var source: String?
     /// Platform origin for UI badges lives in `source`; this preserves the
     /// local capture subtype such as dictation, cua, meeting, or audio_import.
@@ -73,7 +68,6 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         speakerTranscript: String? = nil,
         summaryText: String? = nil,
         manualNotes: String? = nil,
-        prosodyJSON: String? = nil,
         source: String? = nil,
         localSource: String? = nil,
         meetingStatus: MeetingStatus? = nil,
@@ -94,7 +88,6 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         self.speakerTranscript = speakerTranscript
         self.summaryText = summaryText
         self.manualNotes = manualNotes
-        self.prosodyJSON = prosodyJSON
         self.source = source
         self.localSource = localSource
         self.meetingStatus = meetingStatus
@@ -236,9 +229,6 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let selectedTemplateKind: MeetingTemplateKind?
     public let selectedTemplatePrompt: String?
     public let source: MeetingSource
-    /// JSON-encoded `ProsodyReport` computed after the meeting from acoustic +
-    /// turn-taking analysis. Nil for older records / meetings without audio.
-    public let prosodyJSON: String?
 
     public init(
         id: Int64,
@@ -259,8 +249,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
-        source: MeetingSource = .meeting,
-        prosodyJSON: String? = nil
+        source: MeetingSource = .meeting
     ) {
         self.id = id
         self.title = title
@@ -281,7 +270,6 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.selectedTemplateKind = selectedTemplateKind
         self.selectedTemplatePrompt = selectedTemplatePrompt
         self.source = source
-        self.prosodyJSON = prosodyJSON
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -304,7 +292,6 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case selectedTemplateKind
         case selectedTemplatePrompt
         case source
-        case prosodyJSON
     }
 
     public init(from decoder: Decoder) throws {
@@ -328,8 +315,7 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             selectedTemplateName: try c.decodeIfPresent(String.self, forKey: .selectedTemplateName),
             selectedTemplateKind: try c.decodeIfPresent(MeetingTemplateKind.self, forKey: .selectedTemplateKind),
             selectedTemplatePrompt: try c.decodeIfPresent(String.self, forKey: .selectedTemplatePrompt),
-            source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting,
-            prosodyJSON: try c.decodeIfPresent(String.self, forKey: .prosodyJSON)
+            source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting
         )
     }
 
@@ -355,14 +341,6 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
 
     public var appliedTemplateKind: MeetingTemplateKind {
         selectedTemplateKind ?? .auto
-    }
-
-    /// Decoded prosody report, if present and parseable.
-    public var prosodyReport: ProsodyReport? {
-        guard let prosodyJSON, let data = prosodyJSON.data(using: .utf8) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(ProsodyReport.self, from: data)
     }
 }
 

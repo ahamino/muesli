@@ -72,7 +72,6 @@ struct MeetingTemplateDefinition: Identifiable, Equatable, Sendable {
 
 enum MeetingTemplates {
     static let autoID = "auto"
-    static let interviewID = "interview"
     static let customIconFallback = "square.and.pencil"
 
     struct CustomIconOption: Identifiable, Equatable, Sendable {
@@ -182,38 +181,6 @@ enum MeetingTemplates {
 
             ## Decision and Next Steps
             - [ ] Hiring decision, interview progression, or follow-up items
-            """
-        ),
-        MeetingTemplateDefinition(
-            id: interviewID,
-            title: "Interview",
-            category: "Recruiting",
-            icon: "person.fill.questionmark",
-            kind: .builtin,
-            promptBody: """
-            Use this structure exactly:
-
-            ## Interview Snapshot
-            Candidate, role, and interview stage (screen / panel / technical / final) if identifiable from the conversation. 1-2 sentences.
-
-            ## What Was Covered
-            - The main questions asked and the topics or competencies probed
-
-            ## Candidate Content — Did they clear the bar?
-            - Strengths: concrete signals from the candidate's answers (depth, structure, ownership, honesty about what they did vs. observed)
-            - Concerns: gaps, hand-waving, or probes that went unaddressed
-
-            ## Interviewer Conviction — Were they won over?
-            Judge this ONLY from delivery and turn-taking dynamics, keep it hedged, and keep it SEPARATE from answer quality (the two often diverge). Use talk-share drift across the meeting (interviewer progressively taking more of the floor = leaning in; flat or shrinking = not), response latency, follow-ups that build on answers vs. redirects or re-asks, and whether energy warmed. State which signals you used. Politeness or talkativeness is not engagement.
-
-            ## Offer Lean
-            One soft, clearly-hedged lean — Likely offer / Lean offer / Toss-up / Lean no / Likely no — with a one-line note on confidence. This is an inference from a single conversation, not a verdict; never state it as fact. Strong answers with flat conviction is a Toss-up, not a Lean offer.
-
-            ## Coaching for the Candidate
-            - [ ] 2-4 specific, do-this-next fixes grounded in the candidate's own delivery (monologue load, fillers, projection, airtime balance, answer structure) and any content gaps
-
-            ## Next Steps
-            - Concrete follow-ups, logistics, or timelines mentioned
             """
         ),
         MeetingTemplateDefinition(

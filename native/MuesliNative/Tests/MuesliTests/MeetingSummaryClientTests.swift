@@ -45,32 +45,6 @@ struct MeetingSummaryClientTests {
         #expect(instructions.contains("## Action Items"))
     }
 
-    @Test("non-interview instructions use the soft supporting-signal prosody guardrail")
-    func defaultProsodyGuardrail() {
-        let instructions = MeetingSummaryClient.summaryInstructions(for: MeetingTemplates.auto.snapshot)
-
-        #expect(instructions.contains("SOFT, SUPPORTING evidence only"))
-        #expect(!instructions.contains("Interviewer Conviction"))
-        #expect(!instructions.contains("two-lens"))
-    }
-
-    @Test("interview template swaps in the conviction-lens prosody guardrail")
-    func interviewProsodyGuardrail() {
-        let interview = MeetingTemplates.resolveDefinition(
-            id: MeetingTemplates.interviewID, customTemplates: []
-        ).snapshot
-        let instructions = MeetingSummaryClient.summaryInstructions(for: interview)
-
-        // Two-lens conviction framing replaces the soft-signal default.
-        #expect(instructions.contains("PRIMARY input"))
-        #expect(instructions.contains("CONVICTION"))
-        #expect(instructions.contains("talk-share drift"))
-        #expect(!instructions.contains("SOFT, SUPPORTING evidence only"))
-        // Template structure is still appended.
-        #expect(instructions.contains("## Offer Lean"))
-        #expect(instructions.contains("## Coaching for the Candidate"))
-    }
-
     @Test("summary instructions include custom template prompt verbatim")
     func promptIncludesCustomTemplate() {
         let instructions = MeetingSummaryClient.summaryInstructions(for: customTemplate)

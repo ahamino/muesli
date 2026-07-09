@@ -1,11 +1,9 @@
 import SwiftUI
 import MuesliCore
-import ProsodyKit
 
 private enum MeetingDocumentMode: Hashable {
     case notes
     case transcript
-    case delivery
 }
 
 private enum RecordingContentMode: Hashable {
@@ -224,7 +222,7 @@ struct MeetingDetailView: View {
                             recordingModePicker
                         }
                     } else {
-                        documentModePicker(for: meeting)
+                        documentModePicker
 
                         headerActions(for: meeting, appliedTemplate: appliedTemplate)
                     }
@@ -384,21 +382,10 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(documentMode == .notes)
                         .accessibilityHidden(documentMode != .notes)
 
-                    Group {
-                        if let annotated = meeting.prosodyReport?.annotatedSegments, !annotated.isEmpty {
-                            AnnotatedTranscriptView(segments: annotated)
-                        } else {
-                            MeetingTranscriptView(transcript: meeting.rawTranscript)
-                        }
-                    }
-                    .opacity(documentMode == .transcript ? 1 : 0)
-                    .allowsHitTesting(documentMode == .transcript)
-                    .accessibilityHidden(documentMode != .transcript)
-
-                    MeetingProsodyView(report: meeting.prosodyReport)
-                        .opacity(documentMode == .delivery ? 1 : 0)
-                        .allowsHitTesting(documentMode == .delivery)
-                        .accessibilityHidden(documentMode != .delivery)
+                    MeetingTranscriptView(transcript: meeting.rawTranscript)
+                        .opacity(documentMode == .transcript ? 1 : 0)
+                        .allowsHitTesting(documentMode == .transcript)
+                        .accessibilityHidden(documentMode != .transcript)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -410,18 +397,14 @@ struct MeetingDetailView: View {
         }
     }
 
-    private func documentModePicker(for meeting: MeetingRecord) -> some View {
-        let hasProsody = meeting.prosodyReport != nil
-        return Picker("", selection: $documentMode) {
+    private var documentModePicker: some View {
+        Picker("", selection: $documentMode) {
             Text("Notes").tag(MeetingDocumentMode.notes)
             Text("Transcript").tag(MeetingDocumentMode.transcript)
-            if hasProsody {
-                Text("Dynamics").tag(MeetingDocumentMode.delivery)
-            }
         }
         .pickerStyle(.segmented)
         .tint(MuesliTheme.accent)
-        .frame(width: hasProsody ? 300 : 220)
+        .frame(width: 220)
         .disabled(isEditingNotes || isEditingTranscript)
     }
 
@@ -672,10 +655,7 @@ struct MeetingDetailView: View {
         HStack {
             Spacer()
 
-            // Re-transcribe doesn't apply to the Dynamics view.
-            if documentMode != .delivery {
-                retranscribeAction(for: meeting)
-            }
+            retranscribeAction(for: meeting)
 
             Button(action: {
                 controller.copyToClipboard(activeCopyText(for: meeting))
@@ -1270,11 +1250,6 @@ struct MeetingDetailView: View {
             return isEditingNotes ? editableNotes : Self.notesContent(for: meeting)
         case .transcript:
             return isEditingTranscript ? editableTranscript : meeting.rawTranscript
-        case .delivery:
-            if let report = meeting.prosodyReport, let text = ProsodyContextBuilder.render(report) {
-                return text
-            }
-            return Self.notesContent(for: meeting)
         }
     }
 
