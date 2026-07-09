@@ -4454,17 +4454,23 @@ final class MuesliController: NSObject {
         )
     }
 
-    /// Thread neighbors + "Part N of M" position for the detail-view breadcrumb.
+    /// Thread parent, direct child follow-ups, and chronological position for
+    /// the detail-view breadcrumb/list.
     /// Returns nil for meetings that are not part of a follow-up thread.
     func meetingThreadContext(for meetingID: Int64) -> MeetingThreadContext? {
         do {
             let thread = try dictationStore.meetingThreadIDs(containing: meetingID)
             guard thread.count > 1, let index = thread.firstIndex(of: meetingID) else { return nil }
             let predecessorID = try dictationStore.meetingPredecessorID(of: meetingID)
-            let successorID = try dictationStore.meetingSuccessorID(of: meetingID)
+            var successorIDs: [Int64] = []
+            for candidateID in thread where candidateID != meetingID {
+                if try dictationStore.meetingPredecessorID(of: candidateID) == meetingID {
+                    successorIDs.append(candidateID)
+                }
+            }
             return MeetingThreadContext(
                 predecessor: predecessorID.flatMap { meeting(id: $0) },
-                successor: successorID.flatMap { meeting(id: $0) },
+                successors: successorIDs.compactMap { meeting(id: $0) },
                 position: index + 1,
                 count: thread.count
             )

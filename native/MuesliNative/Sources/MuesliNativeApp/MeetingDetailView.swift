@@ -1107,8 +1107,8 @@ struct MeetingDetailView: View {
     }
 
     /// Breadcrumb strip shown when this meeting is part of a follow-up thread:
-    /// a link to the direct predecessor, "Part N of M", and the next
-    /// chronological related meeting. Root meetings show no predecessor link.
+    /// a link to the direct predecessor, "Part N of M", and direct follow-ups
+    /// in chronological order. Root meetings show no predecessor link.
     @ViewBuilder
     private var threadBreadcrumb: some View {
         if let threadContext {
@@ -1123,12 +1123,30 @@ struct MeetingDetailView: View {
                 Text("Part \(threadContext.position) of \(threadContext.count)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(MuesliTheme.textTertiary)
-                if let successor = threadContext.successor {
-                    threadLink(
-                        icon: "arrow.turn.left.down",
-                        text: "Followed by: \(successor.title) \u{00B7} \(MeetingBrowserLogic.formatStartTime(successor.startTime))",
-                        targetID: successor.id
-                    )
+                switch threadContext.successors.count {
+                case 0:
+                    EmptyView()
+                case 1:
+                    if let successor = threadContext.successors.first {
+                        threadLink(
+                            icon: "arrow.turn.left.down",
+                            text: "Followed by: \(successor.title) \u{00B7} \(MeetingBrowserLogic.formatStartTime(successor.startTime))",
+                            targetID: successor.id
+                        )
+                    }
+                default:
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Follow-ups (\(threadContext.successors.count))")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                        ForEach(threadContext.successors) { successor in
+                            threadLink(
+                                icon: "arrow.turn.left.down",
+                                text: "\(successor.title) \u{00B7} \(MeetingBrowserLogic.formatStartTime(successor.startTime))",
+                                targetID: successor.id
+                            )
+                        }
+                    }
                 }
             }
         }

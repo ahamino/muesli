@@ -1,11 +1,11 @@
 import Foundation
 import MuesliCore
 
-/// Neighbors and position of a meeting inside its follow-up thread, for the
-/// detail-view breadcrumb.
+/// Parent, direct children, and chronological position for the detail-view
+/// follow-up context.
 struct MeetingThreadContext {
     let predecessor: MeetingRecord?
-    let successor: MeetingRecord?
+    let successors: [MeetingRecord]
     let position: Int
     let count: Int
 }
