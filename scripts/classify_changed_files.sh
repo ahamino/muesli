@@ -101,7 +101,7 @@ if [[ "$workflow" == true && "$full_ci" == false ]]; then
   workflow_ci=true
 fi
 
-if [[ "$source_or_release" == true || "$workflow" == true || "$repo_policy" == true || "$unknown" == true ]]; then
+if [[ "$source_or_release" == true || "$workflow" == true || "$ci_config" == true || "$repo_policy" == true || "$unknown" == true ]]; then
   review_worthy=true
 fi
 
