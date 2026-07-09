@@ -4461,7 +4461,7 @@ final class MuesliController: NSObject {
             let thread = try dictationStore.meetingThreadIDs(containing: meetingID)
             guard thread.count > 1, let index = thread.firstIndex(of: meetingID) else { return nil }
             let predecessorID = try dictationStore.meetingPredecessorID(of: meetingID)
-            let successorID = index + 1 < thread.count ? thread[index + 1] : nil
+            let successorID = try dictationStore.meetingSuccessorID(of: meetingID)
             return MeetingThreadContext(
                 predecessor: predecessorID.flatMap { meeting(id: $0) },
                 successor: successorID.flatMap { meeting(id: $0) },

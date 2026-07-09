@@ -86,6 +86,48 @@ struct MeetingFollowUpThreadTests {
         return store
     }
 
+    private func makeLegacyStoreWithMeeting() throws -> DictationStore {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-followup-legacy-test-\(UUID().uuidString).db")
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 1)
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        CREATE TABLE meetings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            calendar_event_id TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT,
+            duration_seconds REAL,
+            raw_transcript TEXT,
+            formatted_notes TEXT,
+            mic_audio_path TEXT,
+            system_audio_path TEXT,
+            word_count INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'meeting',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO meetings (
+            title, calendar_event_id, start_time, end_time, duration_seconds,
+            raw_transcript, formatted_notes, mic_audio_path, system_audio_path,
+            word_count, source
+        )
+        VALUES (
+            'Legacy root', NULL, '2026-07-01T10:00:00Z',
+            '2026-07-01T10:01:00Z', 60, 'legacy transcript',
+            'legacy notes', NULL, NULL, 2, 'meeting'
+        );
+        """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 2)
+        }
+        return DictationStore(databaseURL: url)
+    }
+
     @discardableResult
     private func makeMeeting(
         _ store: DictationStore,
@@ -123,6 +165,28 @@ struct MeetingFollowUpThreadTests {
             }
         }
         return columns
+    }
+
+    private func indexNames(_ table: String, store: DictationStore) throws -> Set<String> {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 1)
+        }
+        defer { sqlite3_close(db) }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA index_list(\(table))", -1, &statement, nil) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 2)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var indexes = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1) {
+                indexes.insert(String(cString: name))
+            }
+        }
+        return indexes
     }
 
     private func completeMeeting(_ store: DictationStore, id: Int64, title: String) throws {
@@ -164,6 +228,25 @@ struct MeetingFollowUpThreadTests {
         #expect(!dictationColumns.contains("follow_up_to_record_name"))
         #expect(meetingColumns.contains("follow_up_to_id"))
         #expect(meetingColumns.contains("follow_up_to_record_name"))
+    }
+
+    @Test("legacy schema migration adds follow-up metadata and traversal indexes")
+    func legacySchemaMigrationAddsFollowUpMetadataAndIndexes() throws {
+        let store = try makeLegacyStoreWithMeeting()
+
+        try store.migrateIfNeeded()
+
+        let meetingColumns = try tableColumns("meetings", store: store)
+        let meetingIndexes = try indexNames("meetings", store: store)
+        let legacy = try #require(try store.meeting(id: 1))
+
+        #expect(meetingColumns.contains("follow_up_to_id"))
+        #expect(meetingColumns.contains("follow_up_to_record_name"))
+        #expect(legacy.followUpToID == nil)
+        #expect(legacy.followUpToRecordName == nil)
+        #expect(meetingIndexes.contains("idx_meetings_follow_up"))
+        #expect(meetingIndexes.contains("idx_meetings_follow_up_record_name"))
+        #expect(!meetingIndexes.contains("idx_meetings_live_follow_up_unique"))
     }
 
     @Test("created follow-up inherits the requested folder")
@@ -245,6 +328,7 @@ struct MeetingFollowUpThreadTests {
         #expect(try store.meetingPredecessorID(of: earlier) == a)
         #expect(try store.meetingPredecessorID(of: later) == a)
         #expect(try store.meetingSuccessorID(of: a) == earlier)
+        #expect(try store.meetingSuccessorID(of: earlier) == nil)
         #expect(try store.meetingThreadIDs(containing: a) == [a, earlier, later])
         #expect(try store.latestMeetingIDInThread(of: a) == later)
     }
