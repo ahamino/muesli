@@ -1027,6 +1027,11 @@ struct AppConfig: Codable {
     var activeTranscriptCleanupPromptId: String = TranscriptCleanupPrompts.defaultID
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
+    // Notion integration — one-way push of meetings + dictations into a user's workspace
+    // via an internal-integration token. Two target databases (Meetings, Dictations).
+    var notionSyncEnabled: Bool = false
+    var notionDataSourceID: String = ""
+    var notionLastSyncedAt: Date?
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
@@ -1137,6 +1142,9 @@ struct AppConfig: Codable {
         case activeTranscriptCleanupPromptId = "active_transcript_cleanup_prompt_id"
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
+        case notionSyncEnabled = "notion_sync_enabled"
+        case notionDataSourceID = "notion_data_source_id"
+        case notionLastSyncedAt = "notion_last_synced_at"
         case enableScreenContext = "enable_screen_context"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
@@ -1307,6 +1315,9 @@ struct AppConfig: Codable {
             activeTranscriptCleanupPromptId = defaults.activeTranscriptCleanupPromptId
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
+        notionSyncEnabled = (try? c.decode(Bool.self, forKey: .notionSyncEnabled)) ?? defaults.notionSyncEnabled
+        notionDataSourceID = (try? c.decode(String.self, forKey: .notionDataSourceID)) ?? defaults.notionDataSourceID
+        notionLastSyncedAt = try? c.decode(Date.self, forKey: .notionLastSyncedAt)
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
