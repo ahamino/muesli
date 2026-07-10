@@ -2462,10 +2462,17 @@ public final class DictationStore {
         db: OpaquePointer?
     ) throws -> (dictations: Int, meetings: Int) {
         let cutoff = now.addingTimeInterval(-max(retentionInterval, 0)).timeIntervalSince1970
-        let dictations = try purgeSoftDeletedRows(table: "dictations", deletedBefore: cutoff, db: db)
-        try detachFollowUpSuccessorsOfPurgeableMeetings(deletedBefore: cutoff, db: db)
-        let meetings = try purgeSoftDeletedRows(table: "meetings", deletedBefore: cutoff, db: db)
-        return (dictations, meetings)
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            let dictations = try purgeSoftDeletedRows(table: "dictations", deletedBefore: cutoff, db: db)
+            try detachFollowUpSuccessorsOfPurgeableMeetings(deletedBefore: cutoff, db: db)
+            let meetings = try purgeSoftDeletedRows(table: "meetings", deletedBefore: cutoff, db: db)
+            try exec("COMMIT", db: db)
+            return (dictations, meetings)
+        } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
     }
 
     private func detachFollowUpSuccessors(of predecessorID: Int64, db: OpaquePointer?) throws {

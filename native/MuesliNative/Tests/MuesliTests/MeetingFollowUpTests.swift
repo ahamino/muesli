@@ -416,6 +416,54 @@ struct MeetingFollowUpThreadTests {
         #expect(try store.meetingPredecessorID(of: b) == nil)
     }
 
+    @Test("tombstone purge rolls back successor detachment when deletion fails")
+    func purgeRollsBackWhenMeetingDeletionFails() throws {
+        let store = try makeStore()
+        let rootID = try makeMeeting(store, title: "Root")
+        let followUpID = try makeMeeting(store, title: "Follow-up", followUpToID: rootID)
+
+        var db: OpaquePointer?
+        guard sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 1)
+        }
+        let setupSQL = """
+        UPDATE meetings
+        SET deleted_at = 1, updated_at = 1, sync_dirty = 0
+        WHERE id = \(rootID);
+        CREATE TRIGGER fail_meeting_tombstone_purge
+        BEFORE DELETE ON meetings
+        WHEN OLD.id = \(rootID)
+        BEGIN
+            SELECT RAISE(ABORT, 'forced meeting purge failure');
+        END;
+        """
+        guard sqlite3_exec(db, setupSQL, nil, nil, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            throw NSError(domain: "MeetingFollowUpTests", code: 2)
+        }
+        sqlite3_close(db)
+
+        #expect(throws: Error.self) {
+            try store.purgeSoftDeletedTextRecords(olderThan: 0, now: Date(timeIntervalSince1970: 2))
+        }
+
+        let followUp = try #require(try store.meeting(id: followUpID))
+        #expect(followUp.followUpToID == rootID)
+
+        guard sqlite3_open(store.resolvedDatabaseURL.path, &db) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 3)
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT deleted_at FROM meetings WHERE id = ?", -1, &statement, nil) == SQLITE_OK else {
+            throw NSError(domain: "MeetingFollowUpTests", code: 4)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, rootID)
+        #expect(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(sqlite3_column_type(statement, 0) != SQLITE_NULL)
+    }
+
     @Test("sync export carries stable predecessor record names")
     func syncExportCarriesStablePredecessorRecordName() throws {
         let store = try makeStore()
