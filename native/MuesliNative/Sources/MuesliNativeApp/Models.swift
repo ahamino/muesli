@@ -111,17 +111,8 @@ struct BackendOption: Equatable {
         .whisperTinyEnglish, .whisperSmall, .whisperMedium, .whisperLargeTurbo,
     ]
 
-    static let qwen3Asr = BackendOption(
-        backend: "qwen",
-        model: "FluidInference/qwen3-asr-0.6b-coreml",
-        label: "Qwen3 ASR",
-        sizeLabel: "~1.3 GB",
-        description: "Multilingual, 52 languages. Slower than Parakeet (~2-3s). First use takes ~30s to warm up.",
-        recommended: false
-    )
-
     static let experimental: [BackendOption] = [
-        .senseVoiceSmall, .qwen3Asr, .indicASR,
+        .senseVoiceSmall, .indicASR,
     ]
 
     /// Models available for download and use.
@@ -189,11 +180,6 @@ struct BackendOption: Equatable {
                 }
             }
             return false
-        case "qwen":
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
-                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
         case "nemotron35":
             let path = fm.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")

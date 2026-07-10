@@ -108,7 +108,7 @@ actor SenseVoiceTranscriber {
         message: String,
         progress: ((Double, String?) -> Void)?
     ) async throws {
-        try await DownloadUtils.downloadSubdirectory(
+        try await ModelHub.download(
             .senseVoiceSmall,
             subdirectory: subdirectory,
             to: directory,
@@ -133,7 +133,7 @@ actor SenseVoiceTranscriber {
             Repo.senseVoiceSmall.remotePath,
             ModelNames.SenseVoice.vocabularyFile
         )
-        let data = try await DownloadUtils.fetchHuggingFaceFile(
+        let data = try await ModelHub.fetchFile(
             from: remoteURL,
             description: "SenseVoice vocabulary"
         )

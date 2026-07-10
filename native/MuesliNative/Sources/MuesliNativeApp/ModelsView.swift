@@ -479,7 +479,6 @@ struct ModelsView: View {
         case "fluidaudio": return "nvidia-logo"
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
-        case "qwen": return "qwen-logo"
         case "nemotron35": return "nvidia-logo"
         case "indicasr": return "ai4bharat-logo"
         case "sensevoice": return "qwen-logo"
@@ -1016,10 +1015,6 @@ struct ModelsView: View {
                     }
                 }
             }
-        case "qwen":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try removeItemIfPresent(at: path, fileManager: fm)
         default:
             break
         }
@@ -1084,11 +1079,6 @@ struct ModelsView: View {
                 }
             }
             return false
-        case "qwen":
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
-                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
         case "indicasr":

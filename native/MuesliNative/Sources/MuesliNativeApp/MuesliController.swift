@@ -7620,8 +7620,6 @@ final class MuesliController: NSObject {
             switch nsError.code {
             case 1:
                 return "Nemotron requires macOS 15 or later. Choose another model to test dictation."
-            case 2:
-                return "Qwen3 ASR requires macOS 15 or later. Choose another model to test dictation."
             case 4:
                 return "Cohere Transcribe requires macOS 15 or later. Choose another model to test dictation."
             default:
