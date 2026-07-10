@@ -73,6 +73,9 @@ struct ExportCoordinator {
         var iterations = 0
         while iterations < Self.maxDrainIterations {
             iterations += 1
+            // Halt promptly when the run is cancelled (e.g. the user disabled sync mid-push)
+            // instead of finishing the whole batch. finish() still runs on the way out.
+            if Task.isCancelled { break }
 
             // FIX C: surface query failures instead of masquerading as "up to date".
             let meetings: [ExportRecord]
@@ -92,6 +95,7 @@ struct ExportCoordinator {
 
             var progressedThisBatch = false
             for record in batch {
+                if Task.isCancelled { break }
                 do {
                     // FIX B: the id must persist the moment the remote page exists (dedup),
                     // while syncedAt (export complete) persists only on full success
@@ -147,6 +151,7 @@ struct ExportCoordinator {
         var unpublishIterations = 0
         unpublishDrain: while unpublishIterations < Self.maxDrainIterations {
             unpublishIterations += 1
+            if Task.isCancelled { break }
 
             let toUnpublish: [UnpublishTarget]
             do {
@@ -160,6 +165,7 @@ struct ExportCoordinator {
 
             var progressedThisBatch = false
             for rec in toUnpublish {
+                if Task.isCancelled { break }
                 do {
                     try await target.unpublish(remoteID: rec.remoteID)
                     try store.clearExportState(kind: rec.kind, id: rec.localID, target: target.key)

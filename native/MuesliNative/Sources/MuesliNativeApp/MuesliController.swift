@@ -375,6 +375,7 @@ final class MuesliController: NSObject {
     private var notionPushDebounceTask: Task<Void, Never>?
     private var notionSetupTask: Task<Void, Never>?
     private var notionSetupGeneration = 0
+    private var notionPushGeneration = 0
     private var notionPushRerunPending = false
     private var hasEnsuredICloudSubscription = false
     private var bridgeActivationPending = false
@@ -1282,7 +1283,17 @@ final class MuesliController: NSObject {
             // create a database or complete a push after the user opted out.
             notionSetupTask?.cancel()
             notionSetupTask = nil
+            // Cancel the debounce and any in-flight push, and clear the rerun/progress flags so a
+            // subsequent re-enable starts cleanly instead of inheriting stale state. Bump the push
+            // generation so the in-flight run's completion handler no-ops (it can't clobber a new
+            // push task's handle or reset current state).
+            notionPushDebounceTask?.cancel()
+            notionPushDebounceTask = nil
+            notionPushRerunPending = false
+            notionPushGeneration += 1
             notionPushTask?.cancel()
+            notionPushTask = nil
+            appState.isNotionPushInProgress = false
             NotionCredentialStore.delete()
             appState.notionToken = ""
             appState.notionStatus = nil
@@ -1423,10 +1434,15 @@ final class MuesliController: NSObject {
         let store = dictationStore
         appState.isNotionPushInProgress = true
         appState.notionStatus = "Syncing with Notion..."
+        notionPushGeneration += 1
+        let pushGen = notionPushGeneration
         notionPushTask = Task { [weak self] in
             let result = await coordinator.run(target: target, store: store)
             await MainActor.run {
                 guard let self else { return }
+                // A superseded or cancelled run (e.g. sync disabled mid-push) must no-op instead
+                // of resetting the current task handle / push state.
+                guard self.notionPushGeneration == pushGen else { return }
                 self.notionPushTask = nil
                 self.appState.isNotionPushInProgress = false
                 // If an edit arrived while this push was in flight, re-arm the debounced push so

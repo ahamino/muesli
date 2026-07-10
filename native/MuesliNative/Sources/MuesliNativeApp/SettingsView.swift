@@ -2173,10 +2173,15 @@ struct SettingsView: View {
         }
     }
 
-    private func notionLastSyncedText(_ date: Date) -> String {
+    // Hoisted to a static so we don't allocate a formatter on every render.
+    private static let notionLastSyncedFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter
+    }()
+
+    private func notionLastSyncedText(_ date: Date) -> String {
+        Self.notionLastSyncedFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     @ViewBuilder

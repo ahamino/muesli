@@ -94,6 +94,45 @@ struct NotionPushStoreTests {
         #expect(record.publishState()["notion"]?.id == "page-xyz")
     }
 
+    @Test("the sync-migration query preserves publish_state_json (page id survives CloudKit seed)")
+    func syncMigrationPreservesPublishState() throws {
+        let store = try makeStore()
+
+        // Meeting: mark exported so publish_state_json carries the Notion page id.
+        let meetingID = try store.insertMeeting(
+            title: "Migrate me", calendarEventID: nil,
+            startTime: Date(timeIntervalSince1970: 1_700_000_000),
+            endTime: Date(timeIntervalSince1970: 1_700_000_600),
+            rawTranscript: "hello", formattedNotes: "## Notes",
+            micAudioPath: nil, systemAudioPath: nil
+        )
+        let pendingMeetings = try store.meetingsNeedingExport(target: "notion")
+        let meetingUpdatedAt = try #require(pendingMeetings.first { $0.localID == meetingID }?.updatedAt)
+        #expect(try store.markExported(
+            kind: .meeting, id: meetingID, target: "notion", remoteID: "page-migrate", syncedAt: meetingUpdatedAt
+        ))
+
+        // Dictation: same, on the dictation column layout (index 12).
+        let dictationID = try store.insertDictation(
+            text: "note to migrate", durationSeconds: 3, appContext: "Xcode", startedAt: Date(), endedAt: Date()
+        )
+        let pendingDictations = try store.dictationsNeedingExport(target: "notion")
+        let dictationUpdatedAt = try #require(pendingDictations.first { $0.localID == dictationID }?.updatedAt)
+        #expect(try store.markExported(
+            kind: .dictation, id: dictationID, target: "notion", remoteID: "d-migrate", syncedAt: dictationUpdatedAt
+        ))
+
+        // The one-time CloudKit seed reads through textRecordsForSyncMigration — the page id
+        // must survive (regression guard for the dropped publish_state_json column).
+        let migratedMeetings = try store.textRecordsForSyncMigration(kind: .meeting)
+        let migratedMeeting = try #require(migratedMeetings.first { $0.title == "Migrate me" })
+        #expect(migratedMeeting.publishState()["notion"]?.id == "page-migrate")
+
+        let migratedDictations = try store.textRecordsForSyncMigration(kind: .dictation)
+        let migratedDictation = try #require(migratedDictations.first { $0.publishStateJSON?.contains("d-migrate") == true })
+        #expect(migratedDictation.publishState()["notion"]?.id == "d-migrate")
+    }
+
     @Test("nothing needs a push once the queue is empty")
     func emptyQueue() throws {
         let store = try makeStore()

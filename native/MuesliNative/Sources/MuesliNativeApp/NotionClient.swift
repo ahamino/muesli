@@ -14,14 +14,17 @@ enum NotionClient {
 
     /// The Muesli app icon, hosted in the public repo, used as the icon for every page and
     /// database Muesli creates in Notion (an `external` icon — Notion fetches + caches it).
-    static let muesliIconURL = "https://raw.githubusercontent.com/Muesli-HQ/muesli/main/assets/muesli_app_icon.png"
+    // Pinned to an immutable commit SHA so a future rename/move of the asset doesn't break
+    // icons/covers on databases we already created (Notion caches the URL it was given).
+    static let muesliIconURL = "https://raw.githubusercontent.com/Muesli-HQ/muesli/503de73283e72b48c2c7940dd5b66c949ec3d941/assets/muesli_app_icon.png"
     static var muesliIcon: [String: Any] {
         ["type": "external", "external": ["url": muesliIconURL]]
     }
 
     /// The Muesli banner image, used as the `cover` of the database Muesli creates in Notion
     /// (an `external` cover — Notion fetches + caches it).
-    static let muesliBannerURL = "https://raw.githubusercontent.com/Muesli-HQ/muesli/main/assets/muesli-readme-og.jpg"
+    // Pinned to an immutable commit SHA (see muesliIconURL) so the cover survives asset moves.
+    static let muesliBannerURL = "https://raw.githubusercontent.com/Muesli-HQ/muesli/503de73283e72b48c2c7940dd5b66c949ec3d941/assets/muesli-readme-og.jpg"
     static var muesliCover: [String: Any] {
         ["type": "external", "external": ["url": muesliBannerURL]]
     }
@@ -303,7 +306,13 @@ enum NotionClient {
         var ids: [String] = []
         try await paginate(makeRequest: { cursor in
             var path = "blocks/\(pageID)/children?page_size=100"
-            if let cursor { path += "&start_cursor=\(cursor)" }
+            if let cursor {
+                // Notion cursors are opaque base64 and can contain +, /, = — percent-encode so
+                // they don't malform the query string. Encode everything but unreserved chars.
+                let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+                let encoded = cursor.addingPercentEncoding(withAllowedCharacters: allowed) ?? cursor
+                path += "&start_cursor=\(encoded)"
+            }
             return try request(path: path, method: "GET", token: token)
         }, collect: { json in
             for block in (json["results"] as? [[String: Any]]) ?? [] {
@@ -347,12 +356,16 @@ enum NotionClient {
         return req
     }
 
-    /// Executes a request with a bounded retry. Retries on 429/529 (honoring `Retry-After`),
-    /// on transient 5xx (500/502/503/504), and on URLSession transport errors — all with the
-    /// same capped exponential-ish backoff (1–30s). Non-retryable 4xx (except 429) throw
-    /// immediately.
+    /// Executes a request with a bounded retry. Retries on 429/529 for ALL methods (honoring
+    /// `Retry-After`), since a rate-limited request was rejected, not processed. Transient 5xx
+    /// (500/502/503/504) and URLSession transport errors are retried ONLY for idempotent methods
+    /// (GET/HEAD/DELETE): a POST/PATCH may have reached Notion and mutated state even though the
+    /// response was lost, so retrying it would duplicate the write (e.g. a second `POST /pages`).
+    /// Non-retryable 4xx (except 429) throw immediately.
     private static func send(_ request: URLRequest, maxRetries: Int = 4) async throws -> Data {
         var attempt = 0
+        let method = (request.httpMethod ?? "GET").uppercased()
+        let idempotent = ["GET", "HEAD", "DELETE"].contains(method)
         // Capped exponential-ish backoff shared by every retry path.
         func backoff(retryAfterHeader: String? = nil) async throws {
             let hinted = retryAfterHeader.flatMap(Double.init) ?? Double(attempt)
@@ -363,8 +376,10 @@ enum NotionClient {
             do {
                 (data, response) = try await URLSession.shared.data(for: request)
             } catch {
-                // Transport error (connection dropped, timeout, DNS, …) — retry bounded.
-                if attempt < maxRetries {
+                // Transport error (connection dropped, timeout, DNS, …) — retry bounded, but only
+                // for idempotent methods so a non-idempotent write that may already have landed
+                // isn't duplicated.
+                if idempotent, attempt < maxRetries {
                     attempt += 1
                     try await backoff()
                     continue
@@ -377,7 +392,10 @@ enum NotionClient {
             if (200..<300).contains(http.statusCode) { return data }
             let isRateLimited = http.statusCode == 429 || http.statusCode == 529
             let isTransient5xx = [500, 502, 503, 504].contains(http.statusCode)
-            if (isRateLimited || isTransient5xx), attempt < maxRetries {
+            // Rate limits are safe to retry for any method (rejected, not processed). Transient
+            // 5xx is only safe for idempotent methods — a POST/PATCH may have mutated state.
+            let shouldRetry = isRateLimited || (isTransient5xx && idempotent)
+            if shouldRetry, attempt < maxRetries {
                 attempt += 1
                 try await backoff(retryAfterHeader: isRateLimited ? http.value(forHTTPHeaderField: "Retry-After") : nil)
                 continue

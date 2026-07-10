@@ -2092,7 +2092,8 @@ public final class DictationStore {
         var records: [SyncTextRecord] = []
         let dictationSQL = """
         SELECT cloud_record_name, raw_text, app_context, timestamp, started_at, ended_at,
-               duration_seconds, word_count, source, updated_at, deleted_at, cloud_change_tag
+               duration_seconds, word_count, source, updated_at, deleted_at, cloud_change_tag,
+               publish_state_json
         FROM dictations
         WHERE cloud_record_name IS NOT NULL
         ORDER BY updated_at DESC, id DESC
@@ -2122,7 +2123,7 @@ public final class DictationStore {
         let meetingSQL = """
         SELECT cloud_record_name, title, raw_transcript, formatted_notes, manual_notes,
                start_time, duration_seconds, word_count, source, meeting_status,
-               updated_at, deleted_at, cloud_change_tag
+               updated_at, deleted_at, cloud_change_tag, publish_state_json
         FROM meetings
         WHERE cloud_record_name IS NOT NULL
         ORDER BY updated_at DESC, id DESC
