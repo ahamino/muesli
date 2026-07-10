@@ -112,6 +112,13 @@ swift test --package-path native/MuesliNative \
   --scratch-path "$HOME/Library/Caches/muesli-spm/test"
 ```
 
+## Adding an export target
+
+To mirror meetings/dictations to a new destination (Obsidian, a folder, a webhook, …),
+implement the `ExportTarget` protocol — the shared `ExportCoordinator` handles dirty-record
+tracking, idempotency, delete propagation, retries, and cross-device dedup for you. See
+[docs/export-targets.md](docs/export-targets.md) for the contract and a worked example.
+
 ## Pull Requests
 
 - Keep changes focused and include tests for behavioral changes.
