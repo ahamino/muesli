@@ -53,6 +53,19 @@ struct TelemetryRuntimeConfigurationTests {
         #expect(unsupported.channel == .unconfigured)
     }
 
+    @Test("treats empty and whitespace plist values as missing")
+    func treatsBlankValuesAsMissing() {
+        let blankAppID = makeConfiguration(appID: "  \n", channel: "dev")
+        let blankChannel = makeConfiguration(appID: validAppID, channel: " \t ")
+
+        for configuration in [blankAppID, blankChannel] {
+            #expect(!configuration.isEnabled)
+            #expect(configuration.appID.isEmpty)
+            #expect(configuration.sdkAppID == TelemetryRuntimeConfiguration.disabledSDKAppID)
+            #expect(configuration.channel == .unconfigured)
+        }
+    }
+
     private func makeConfiguration(appID: String?, channel: String?) -> TelemetryRuntimeConfiguration {
         var dictionary: [String: Any] = [:]
         dictionary[TelemetryRuntimeConfiguration.appIDInfoKey] = appID

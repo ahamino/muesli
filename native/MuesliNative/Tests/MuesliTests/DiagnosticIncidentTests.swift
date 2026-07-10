@@ -122,6 +122,28 @@ struct DiagnosticIncidentTests {
         #expect(incident.telemetryParameters["diagnostic.error_domain"] == nil)
     }
 
+    @Test("Nemotron cases map directly to stable fingerprints")
+    func nemotronCasesUseStableFingerprints() {
+        let cases: [(Error, String, String)] = [
+            (NemotronRNNTError.notLoaded, "nemotron_models_not_loaded", "0"),
+            (NemotronRNNTError.downloadFailed("private download detail"), "nemotron_download_failed", "1"),
+            (NemotronRNNTError.preprocessingFailed("private preprocessing detail"), "nemotron_preprocessing_failed", "2"),
+            (NemotronRNNTError.decodingFailed("private decoding detail"), "nemotron_decoding_failed", "3"),
+        ]
+
+        for (error, signature, code) in cases {
+            let fingerprint = DiagnosticErrorCatalog.fingerprint(
+                for: error,
+                kind: .streamingDictationRuntimeFailed,
+                stage: .nemotronStreamingRuntime
+            )
+            #expect(fingerprint.signature == signature)
+            #expect(fingerprint.safeDomain == "NemotronRNNTError")
+            #expect(fingerprint.safeCode == code)
+            #expect(!fingerprint.summary.contains("private"))
+        }
+    }
+
     @Test("recording save failure is classified as degraded output")
     func recordingSaveFailureIsDegraded() {
         let incident = DiagnosticIncident(

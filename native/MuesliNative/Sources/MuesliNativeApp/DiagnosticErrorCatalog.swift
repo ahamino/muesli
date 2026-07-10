@@ -32,8 +32,14 @@ enum DiagnosticErrorCatalog {
         stage: DiagnosticIncidentStage
     ) -> DiagnosticErrorFingerprint {
         guard let error else { return appStateFingerprint(kind: kind, stage: stage) }
-        let nsError = error as NSError
-        guard let match = lookup(domain: nsError.domain, code: String(nsError.code)) else {
+        let match: Match?
+        if let nemotronError = error as? NemotronRNNTError {
+            match = nemotronMatch(for: nemotronError)
+        } else {
+            let nsError = error as NSError
+            match = lookup(domain: nsError.domain, code: String(nsError.code))
+        }
+        guard let match else {
             return .unclassified()
         }
         return DiagnosticErrorFingerprint(
@@ -55,6 +61,61 @@ enum DiagnosticErrorCatalog {
         let meaning: DiagnosticErrorMeaning
         let safeDomain: String?
         let safeCode: String?
+    }
+
+    private enum NemotronFailure: String {
+        case modelsNotLoaded = "0"
+        case downloadFailed = "1"
+        case preprocessingFailed = "2"
+        case decodingFailed = "3"
+
+        var signature: String {
+            switch self {
+            case .modelsNotLoaded: return "nemotron_models_not_loaded"
+            case .downloadFailed: return "nemotron_download_failed"
+            case .preprocessingFailed: return "nemotron_preprocessing_failed"
+            case .decodingFailed: return "nemotron_decoding_failed"
+            }
+        }
+
+        var summary: String {
+            switch self {
+            case .modelsNotLoaded: return "Nemotron streaming models were not loaded"
+            case .downloadFailed: return "Nemotron streaming model download failed"
+            case .preprocessingFailed: return "Nemotron streaming preprocessing failed"
+            case .decodingFailed: return "Nemotron streaming decoding failed"
+            }
+        }
+
+        var area: String {
+            switch self {
+            case .modelsNotLoaded: return "streaming_model_state"
+            case .downloadFailed: return "streaming_model_assets"
+            case .preprocessingFailed: return "streaming_preprocessing"
+            case .decodingFailed: return "streaming_inference"
+            }
+        }
+    }
+
+    private static func nemotronMatch(for error: NemotronRNNTError) -> Match {
+        let failure: NemotronFailure
+        switch error {
+        case .notLoaded: failure = .modelsNotLoaded
+        case .downloadFailed: failure = .downloadFailed
+        case .preprocessingFailed: failure = .preprocessingFailed
+        case .decodingFailed: failure = .decodingFailed
+        }
+        return nemotronMatch(for: failure)
+    }
+
+    private static func nemotronMatch(for failure: NemotronFailure) -> Match {
+        fixedMatch(
+            signature: failure.signature,
+            summary: failure.summary,
+            area: failure.area,
+            domain: "NemotronRNNTError",
+            code: failure.rawValue
+        )
     }
 
     private static func lookup(domain: String, code: String) -> Match? {
@@ -166,21 +227,15 @@ enum DiagnosticErrorCatalog {
             }
         }
         if normalizedDomain.hasSuffix(".NemotronRNNTError") {
-            let values: [(String, String, String)] = [
-                ("nemotron_models_not_loaded", "Nemotron streaming models were not loaded", "streaming_model_state"),
-                ("nemotron_download_failed", "Nemotron streaming model download failed", "streaming_model_assets"),
-                ("nemotron_preprocessing_failed", "Nemotron streaming preprocessing failed", "streaming_preprocessing"),
-                ("nemotron_decoding_failed", "Nemotron streaming decoding failed", "streaming_inference"),
-            ]
-            guard let index = Int(normalizedCode), values.indices.contains(index) else { return nil }
-            let value = values[index]
-            return fixedMatch(
-                signature: value.0,
-                summary: value.1,
-                area: value.2,
-                domain: "NemotronRNNTError",
-                code: normalizedCode
-            )
+            let failure: NemotronFailure
+            switch normalizedCode {
+            case "0": failure = .modelsNotLoaded
+            case "1": failure = .downloadFailed
+            case "2": failure = .preprocessingFailed
+            case "3": failure = .decodingFailed
+            default: return nil
+            }
+            return nemotronMatch(for: failure)
         }
         if normalizedDomain.hasSuffix(".StartupError"), normalizedCode == "0" {
             return fixedMatch(

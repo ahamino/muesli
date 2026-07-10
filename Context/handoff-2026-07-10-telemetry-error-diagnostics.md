@@ -31,9 +31,9 @@ Stable, preprod, dev, and canary builds select their app ID and `muesli.channel`
 
 ## Validation
 
-- 15 focused diagnostic/runtime-configuration tests passed.
+- 17 focused diagnostic/runtime-configuration tests passed.
 - Script classifier tests, changed-script `bash -n`, and `git diff --check` passed.
-- The complete Swift suite passed 1,283 tests across 127 suites after the review fixes.
+- The complete Swift suite passed 1,285 tests across 127 suites after the final review fixes.
 - Before the later request not to rebuild dev, `MuesliDevA` was built and launched with local-only entitlements. Its plist contained the Dev app ID, `dev`, and `com.muesli.dev.a`; the app was subsequently shut down.
 - An ephemeral API query confirmed one matching test-mode Dev launch and zero matching Dev-channel events in production. No anonymous user/session identifiers or event payloads were retained.
 - Unsigned preprod/stable plist inspection was not completed: a cold home-volume release scratch ran out of space, and an external-cache retry was interrupted. No release script, tag, appcast, GitHub release, or production artifact was created.
