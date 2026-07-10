@@ -171,6 +171,9 @@ final class MeetingSession {
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
+    /// Resolves the linked calendar event's attendee count, used to constrain
+    /// speaker diarization. Returns nil for ad-hoc meetings or when unavailable.
+    var attendeeCountProvider: (() async -> Int?)?
     var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
@@ -430,13 +433,35 @@ final class MeetingSession {
             try? FileManager.default.removeItem(at: lastSystemChunkURL)
         }
 
-        var diarizationSegments: [TimedSpeakerSegment]?
-        if let systemAudioURL {
-            // Run speaker diarization on system audio (batch post-processing)
-            if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
-                diarizationSegments = diarizationResult.segments
-            }
-        }
+        // A calendar event's attendee count, when available, constrains the speaker
+        // count on both channels so a crowded call doesn't over- or under-split.
+        let attendeeCount = await attendeeCountProvider?()
+        let speakerBounds = DiarizationSpeakerBounds.fromAttendeeCount(attendeeCount)
+
+        // Diarize both channels. The mic (local) channel is only worth a pass when
+        // the calendar suggests a multi-person meeting (speakerBounds present ⇒ ≥2
+        // attendees) — solo and ad-hoc meetings are almost always one local speaker,
+        // so we skip the cost and keep "You" (the formatter's solo-guard is a second
+        // line of defense). The two passes run concurrently: `diarize` is an actor
+        // method that suspends on the off-actor CoreML `process`, so the coordinator
+        // is free to start the second pass while the first is still running.
+        let coordinator = transcriptionCoordinator
+        async let micDiarizationTask: [TimedSpeakerSegment]? = {
+            guard let rawStreamingMicURL, speakerBounds != nil else { return nil }
+            return try? await coordinator.diarize(
+                at: rawStreamingMicURL,
+                speakerBounds: speakerBounds
+            )?.segments
+        }()
+        async let systemDiarizationTask: [TimedSpeakerSegment]? = {
+            guard let systemAudioURL else { return nil }
+            return try? await coordinator.diarize(
+                at: systemAudioURL,
+                speakerBounds: speakerBounds
+            )?.segments
+        }()
+        let micDiarizationSegments = await micDiarizationTask
+        let diarizationSegments = await systemDiarizationTask
 
         micSegments.append(contentsOf: await micChunkCollector.closeAndDrainSortedSegments())
         micSegments.sort { lhs, rhs in
@@ -488,6 +513,7 @@ final class MeetingSession {
         let reconciledTranscriptInputs = TranscriptReconciler.reconcile(
             micTurns: micSegments,
             systemSegments: systemSegments,
+            micDiarizationSegments: micDiarizationSegments,
             diarizationSegments: diarizationSegments
         )
         let protectedTranscriptInputs = reconciledTranscriptInputs
@@ -495,6 +521,7 @@ final class MeetingSession {
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
+            micDiarizationSegments: protectedTranscriptInputs.micDiarizationSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             meetingStart: meetingStart
         )

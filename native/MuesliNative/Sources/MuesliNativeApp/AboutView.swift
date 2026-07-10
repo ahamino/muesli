@@ -116,7 +116,7 @@ struct AboutView: View {
                 aboutCard {
                     acknowledgement(
                         name: "FluidAudio by FluidInference",
-                        description: "CoreML speech stack powering Parakeet, Qwen3 ASR, Silero VAD, and speaker diarization on Apple Silicon."
+                        description: "CoreML speech stack powering Parakeet, Silero VAD, and speaker diarization on Apple Silicon."
                     )
                     Divider().background(MuesliTheme.surfaceBorder)
                     acknowledgement(

@@ -14,6 +14,9 @@ struct UnifiedCalendarEvent: Identifiable, Equatable {
     /// Optional because legacy events deserialized from older state may not have it.
     var calendarID: String? = nil
     var meetingURL: URL? = nil
+    /// Number of invited attendees, when the source exposes it. Used as a loose
+    /// ceiling for speaker diarization; nil when unknown.
+    var attendeeCount: Int? = nil
 
     enum CalendarSource: String {
         case eventKit
@@ -503,6 +506,8 @@ final class GoogleCalendarClient {
             return nil
         }()
 
+        let attendeeCount = (item["attendees"] as? [[String: Any]])?.count
+
         return UnifiedCalendarEvent(
             id: id,
             title: summary,
@@ -511,7 +516,8 @@ final class GoogleCalendarClient {
             isAllDay: isAllDay,
             source: .googleCalendar,
             calendarID: calendarID,
-            meetingURL: meetingURL
+            meetingURL: meetingURL,
+            attendeeCount: attendeeCount
         )
     }
 
@@ -535,6 +541,11 @@ final class GoogleCalendarClient {
                 // Prefer Google Calendar's meetingURL when EventKit doesn't have one
                 if merged[idx].meetingURL == nil, gEvent.meetingURL != nil {
                     merged[idx].meetingURL = gEvent.meetingURL
+                }
+                // Likewise backfill the attendee count: EventKit often syncs Google
+                // events without attendees, but the Google API exposes them.
+                if merged[idx].attendeeCount == nil, gEvent.attendeeCount != nil {
+                    merged[idx].attendeeCount = gEvent.attendeeCount
                 }
             } else {
                 merged.append(gEvent)

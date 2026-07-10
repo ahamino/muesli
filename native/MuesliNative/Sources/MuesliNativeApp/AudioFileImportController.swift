@@ -195,31 +195,24 @@ enum AudioFileImportController {
 
         try Task.checkCancellation()
 
-        // Run speaker diarization if available
+        // Run speaker diarization if available. Imported files carry no calendar
+        // context, so no speaker-count bounds are applied.
         var diarizedTranscript = rawTranscript
-        if let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
-           diarizerManager.isAvailable {
-            progress("Identifying speakers...")
-            do {
-                let converter = AudioConverter()
-                let samples = try converter.resampleAudioFile(wavURL)
-                try Task.checkCancellation()
-                let diarizationResult = try diarizerManager.performCompleteDiarization(
-                    samples,
-                    sampleRate: 16000
+        progress("Identifying speakers...")
+        do {
+            try Task.checkCancellation()
+            if let diarizationResult = try await transcriptionCoordinator.diarize(at: wavURL),
+               !diarizationResult.segments.isEmpty {
+                diarizedTranscript = formatTranscriptWithSpeakers(
+                    transcription: transcription,
+                    diarizationSegments: diarizationResult.segments,
+                    meetingStart: importedTranscriptTimelineStart()
                 )
-                if !diarizationResult.segments.isEmpty {
-                    diarizedTranscript = formatTranscriptWithSpeakers(
-                        transcription: transcription,
-                        diarizationSegments: diarizationResult.segments,
-                        meetingStart: importedTranscriptTimelineStart()
-                    )
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                fputs("[import] diarization failed, using raw transcript: \(error)\n", stderr)
             }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            fputs("[import] diarization failed, using raw transcript: \(error)\n", stderr)
         }
 
         try Task.checkCancellation()

@@ -102,6 +102,17 @@ final class CalendarMonitor {
         }
     }
 
+    /// Number of invited attendees on the EventKit event with this identifier, or
+    /// nil if the event is unknown or carries no attendee list (e.g. a personal
+    /// event). Used as a loose ceiling for speaker diarization. Uses a fresh store
+    /// so the lookup isn't served from a stale cache.
+    func attendeeCount(forEventIdentifier identifier: String) -> Int? {
+        guard canConfirmMissingEvents else { return nil }
+        let freshStore = EKEventStore()
+        guard let event = freshStore.event(withIdentifier: identifier) else { return nil }
+        return event.attendees?.count
+    }
+
     /// Returns the current calendar event if one is happening right now.
     func currentEvent() -> UpcomingMeetingEvent? {
         let now = Date()
@@ -178,7 +189,8 @@ final class CalendarMonitor {
                 isAllDay: false,
                 source: .eventKit,
                 calendarID: event.calendar?.calendarIdentifier,
-                meetingURL: Self.extractMeetingURL(from: event)
+                meetingURL: Self.extractMeetingURL(from: event),
+                attendeeCount: event.attendees?.count
             )
         }
         return UnifiedCalendarEvent

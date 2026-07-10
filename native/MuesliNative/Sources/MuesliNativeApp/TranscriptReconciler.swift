@@ -5,6 +5,7 @@ import MuesliCore
 struct ReconciledTranscriptInputs {
     let micSegments: [SpeechSegment]
     let systemSegments: [SpeechSegment]
+    let micDiarizationSegments: [TimedSpeakerSegment]?
     let diarizationSegments: [TimedSpeakerSegment]?
 }
 
@@ -34,6 +35,7 @@ enum TranscriptReconciler {
     static func reconcile(
         micTurns: [SpeechSegment],
         systemSegments: [SpeechSegment],
+        micDiarizationSegments: [TimedSpeakerSegment]? = nil,
         diarizationSegments: [TimedSpeakerSegment]?
     ) -> ReconciledTranscriptInputs {
         let normalizedMicTurns = mergeReadableSegments(sortedSegments(micTurns))
@@ -55,6 +57,7 @@ enum TranscriptReconciler {
         return ReconciledTranscriptInputs(
             micSegments: sortedSegments(keptMicTurns),
             systemSegments: sortedSegments(keptSystemTurns),
+            micDiarizationSegments: micDiarizationSegments,
             diarizationSegments: diarizationSegments
         )
     }
