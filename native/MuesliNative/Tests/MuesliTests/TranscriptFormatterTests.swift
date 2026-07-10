@@ -315,8 +315,10 @@ struct TranscriptFormatterTests {
     @Test("diarization picks best overlap when multiple speakers overlap")
     func diarizationBestOverlap() {
         let meetingStart = Date(timeIntervalSince1970: 0)
-        // ASR segment 2.0-8.0 overlaps with spk_A (0-4, overlap=2) and spk_B (3-10, overlap=5)
         let system = [
+            // Clearly spk_A, so it renders first and takes "Speaker 1".
+            SpeechSegment(start: 0.2, end: 1.0, text: "Opening line"),
+            // Overlaps spk_A (0-4, overlap=2) and spk_B (3-10, overlap=5) → best is spk_B.
             SpeechSegment(start: 2.0, end: 8.0, text: "Who said this?"),
         ]
         let diarization = [
@@ -329,7 +331,9 @@ struct TranscriptFormatterTests {
             diarizationSegments: diarization,
             meetingStart: meetingStart
         )
-        // spk_B has more overlap (5s vs 2s)
+        // spk_A renders first (Speaker 1); the ambiguous segment goes to the
+        // higher-overlap spk_B (Speaker 2), and numbering stays contiguous.
+        #expect(result.contains("Speaker 1: Opening line"))
         #expect(result.contains("Speaker 2: Who said this?"))
     }
 
@@ -586,6 +590,53 @@ struct TranscriptFormatterTests {
         )
         #expect(result.contains("Speaker 1: remote a"))
         #expect(result.contains("Speaker 2: remote b"))
+    }
+
+    @Test("a mic segment matching no local diarization falls back to You, not Others")
+    func micUnmatchedFallsBackToYou() {
+        // Two local speakers trigger mic diarization, but one mic ASR segment lands
+        // in a gap far from any diarization segment — it must degrade to "You".
+        let mic = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "alice speaking"),
+            SpeechSegment(start: 3.0, end: 5.0, text: "bob speaking"),
+            SpeechSegment(start: 60.0, end: 61.0, text: "stray local blip"),
+        ]
+        let micDiar = [
+            makeDiarSeg(speakerId: "A", start: 0.0, end: 2.0),
+            makeDiarSeg(speakerId: "B", start: 3.0, end: 5.0),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: [],
+            micDiarizationSegments: micDiar,
+            diarizationSegments: nil,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("You: stray local blip"))
+        #expect(!result.contains("Others"))
+    }
+
+    @Test("speaker numbering is contiguous even if a diarized speaker never renders")
+    func contiguousNumberingWithUnusedSpeaker() {
+        // Mic diarization reports 2 local speakers, but only one produced ASR text.
+        // The remote speaker must still be "Speaker 1", not "Speaker 2" with a gap.
+        let mic = [SpeechSegment(start: 0.0, end: 2.0, text: "only alice talks")]
+        let system = [SpeechSegment(start: 5.0, end: 7.0, text: "remote person")]
+        let micDiar = [
+            makeDiarSeg(speakerId: "A", start: 0.0, end: 2.0),
+            makeDiarSeg(speakerId: "B", start: 3.0, end: 4.0), // no mic ASR overlaps B
+        ]
+        let systemDiar = [makeDiarSeg(speakerId: "X", start: 5.0, end: 7.0)]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: system,
+            micDiarizationSegments: micDiar,
+            diarizationSegments: systemDiar,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("You: only alice talks"))
+        #expect(result.contains("Speaker 1: remote person"))
+        #expect(!result.contains("Speaker 2"))
     }
 
     // MARK: - Helpers

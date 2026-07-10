@@ -438,31 +438,30 @@ final class MeetingSession {
         let attendeeCount = await attendeeCountProvider?()
         let speakerBounds = DiarizationSpeakerBounds.fromAttendeeCount(attendeeCount)
 
-        // Diarize the local (mic) channel too: multiple people can share one mic.
-        // Only worth the extra pass when the calendar suggests a multi-person
-        // meeting (speakerBounds present ⇒ ≥2 attendees) — solo and ad-hoc meetings
-        // are almost always one local speaker, so we skip the cost and keep "You".
-        // The formatter's solo-guard is a second line of defense if we do run it.
-        var micDiarizationSegments: [TimedSpeakerSegment]?
-        if let rawStreamingMicURL, speakerBounds != nil {
-            if let micDiarizationResult = try? await transcriptionCoordinator.diarize(
+        // Diarize both channels. The mic (local) channel is only worth a pass when
+        // the calendar suggests a multi-person meeting (speakerBounds present ⇒ ≥2
+        // attendees) — solo and ad-hoc meetings are almost always one local speaker,
+        // so we skip the cost and keep "You" (the formatter's solo-guard is a second
+        // line of defense). The two passes run concurrently: `diarize` is an actor
+        // method that suspends on the off-actor CoreML `process`, so the coordinator
+        // is free to start the second pass while the first is still running.
+        let coordinator = transcriptionCoordinator
+        async let micDiarizationTask: [TimedSpeakerSegment]? = {
+            guard let rawStreamingMicURL, speakerBounds != nil else { return nil }
+            return try? await coordinator.diarize(
                 at: rawStreamingMicURL,
                 speakerBounds: speakerBounds
-            ) {
-                micDiarizationSegments = micDiarizationResult.segments
-            }
-        }
-
-        var diarizationSegments: [TimedSpeakerSegment]?
-        if let systemAudioURL {
-            // Run speaker diarization on system audio (batch post-processing).
-            if let diarizationResult = try? await transcriptionCoordinator.diarize(
+            )?.segments
+        }()
+        async let systemDiarizationTask: [TimedSpeakerSegment]? = {
+            guard let systemAudioURL else { return nil }
+            return try? await coordinator.diarize(
                 at: systemAudioURL,
                 speakerBounds: speakerBounds
-            ) {
-                diarizationSegments = diarizationResult.segments
-            }
-        }
+            )?.segments
+        }()
+        let micDiarizationSegments = await micDiarizationTask
+        let diarizationSegments = await systemDiarizationTask
 
         micSegments.append(contentsOf: await micChunkCollector.closeAndDrainSortedSegments())
         micSegments.sort { lhs, rhs in

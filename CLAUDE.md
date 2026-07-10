@@ -12,7 +12,7 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Meeting transcription:** Captures mic (You) + system audio (Others) → VAD-driven chunking → speaker diarization → AI-powered meeting notes
 - **Meeting export:** Export notes or transcript as PDF (paginated US Letter) or Markdown via `MeetingExporter.swift`
 - **Screen context:** Accessibility API captures app name + text around cursor for dictation context-awareness (opt-in, off by default)
-- **11 ASR models:** Parakeet v3/v2, Whisper Tiny/Small/Medium/Large Turbo, Cohere Transcribe, Nemotron 3.5 Multilingual, SenseVoice Small, Qwen3 ASR, Indic ASR
+- **10 ASR models:** Parakeet v3/v2, Whisper Tiny/Small/Medium/Large Turbo, Cohere Transcribe, Nemotron 3.5 Multilingual, SenseVoice Small, Indic ASR
 - **3 summarization backends:** OpenAI API key, OpenRouter API key, ChatGPT OAuth (subscription-based)
 - **Camera-based meeting detection:** Requires mic + camera + recognized meeting app (camera alone won't trigger)
 - **Join & Record:** Extract meeting URLs from calendar events (Zoom, Meet, Teams, Webex, Chime, FaceTime), split button with "Join & Record" / "Join Only" / "Record Only", platform icons in notifications
@@ -139,7 +139,6 @@ native/MuesliNative/Sources/
 │   ├── MuesliController.swift    # Central orchestrator — dictation, meetings, onboarding, state
 │   ├── TranscriptionRuntime.swift # Routes to ASR backends, post-processing, VAD + diarization
 │   ├── FluidAudioBackend.swift   # Parakeet TDT on ANE
-│   ├── Qwen3AsrBackend.swift     # Qwen3 ASR on ANE (macOS 15+)
 │   ├── Qwen3PostProcessor.swift  # On-device GGUF LLM for dictation cleanup (opt-in)
 │   ├── WhisperKitBackend.swift   # Whisper on CoreML/ANE via WhisperKit
 │   ├── ScreenContextCapture.swift # AX-based app context for dictation + meetings
@@ -248,9 +247,8 @@ Event-driven architecture for meeting notifications:
 ## Known Limitations
 
 - **Nemotron 3.5 Multilingual (`nemotron35`):** Supported local Nemotron ASR backend. Ships the FluidInference `multilingual/2240ms` variant (~665 MB, vocab 13087, blank 13087). Multilingual incl. Hindi/Chinese/Japanese + 100+ locales via `prompt_id`. In-app **language picker** (`Nemotron35Language` enum → `prompt_id`; config key `nemotron35_language`, default `auto`=101): the controller pushes the selected prompt id to the coordinator (`setNemotron35PromptId`), which applies it to the actor on load/select. Picker UI lives in the Models tab card (mirrors the Cohere language card). A **model-update check** records the HF repo commit sha at download (`<cache>/.revision`) and surfaces an "Update" affordance in the Models tab when the repo's `main` advances (never auto-downloads). Native punctuation (in-vocab). Append-only/no corrections, weak on very short dictations. 2240ms chunk latency (35840 samples). Cache shape `[1,24,42,1024]`. Uses shared `RNNTStreamState` helpers through the `NemotronStreamingTranscribing` protocol; `StreamingDictationController` takes a `chunkSamples` override. Model cached at `~/.cache/muesli/models/nemotron35-multilingual-2240ms/`. Offered in onboarding under "Other models". **Dictation modes:** hold-to-talk uses the normal record→transcribe-file path (`transcribeWithNemotron35`); double-tap uses live streaming (`StreamingDictationController`). `handleStart` allows hold-to-talk; prepare/arm pre-warm stays skipped for streaming backends (`isStreamingDictationBackend`) so the double-tap detection window stays clean.
-- **Qwen3 ASR:** 2-3s latency (autoregressive decoder). First run after launch has ~30s CoreML compilation warmup.
 - **ChatGPT OAuth:** Uses reverse-engineered WHAM API. Could break if OpenAI changes the API.
-- **Speaker diarization:** Post-processing only. Runs after meeting stops.
+- **Speaker diarization:** Post-processing only. Runs after meeting stops. Both channels are diarized (FluidAudio `OfflineDiarizerManager`): the remote/system stream and — when the calendar shows ≥2 attendees — the local/mic stream too. A calendar event's attendee count is applied as a loose speaker-count ceiling (`DiarizationSpeakerBounds`, never an exact count). Labels: the earliest-speaking local voice is `You`; every other distinct voice is `Speaker N`. **Limitation:** with no voice enrollment, `You` is whoever speaks first on the mic, not necessarily the device owner — in a shared room a colleague speaking first is labeled `You`, and a person shown as `You` in the live transcript may become `Speaker N` in the final pass.
 - **Screen context OCR disabled during meetings:** `CGWindowListCreateImage` conflicts with `SCStream`. AX-based context used instead. Planned fix: migrate to CoreAudio tap for system audio (see `Context/handoff-2026-04-16-coreaudio-tap-migration.md`).
 - **NSSavePanel:** Must use `beginSheetModal(for:)` in SwiftUI, never `runModal()`. `NSAttributedString(html:)` deadlocks on main thread — build attributed strings manually.
 - **App restart during onboarding:** Uses `exit(0)` via detached shell. `NSApp.terminate(nil)` inside SwiftUI animation context can crash.

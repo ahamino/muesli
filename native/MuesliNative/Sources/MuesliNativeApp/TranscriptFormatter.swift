@@ -3,92 +3,83 @@ import Foundation
 import MuesliCore
 
 enum TranscriptFormatter {
-    /// Backward-compatible merge without diarization.
-    static func merge(micSegments: [SpeechSegment], systemSegments: [SpeechSegment], meetingStart: Date) -> String {
-        merge(micSegments: micSegments, systemSegments: systemSegments, diarizationSegments: nil, meetingStart: meetingStart)
-    }
-
-    /// Merge with optional speaker diarization for system audio.
-    static func merge(
-        micSegments: [SpeechSegment],
-        systemSegments: [SpeechSegment],
-        diarizationSegments: [TimedSpeakerSegment]?,
-        meetingStart: Date
-    ) -> String {
-        merge(
-            micSegments: micSegments,
-            systemSegments: systemSegments,
-            micDiarizationSegments: nil,
-            diarizationSegments: diarizationSegments,
-            meetingStart: meetingStart
-        )
-    }
-
-    /// Merge with optional per-channel speaker diarization.
+    /// Merge mic (local) and system (remote) segments into a labeled transcript,
+    /// with optional per-channel speaker diarization.
     ///
-    /// The mic (local) and system (remote) channels are diarized independently and
-    /// never share raw speaker IDs, so their label maps are built separately over a
-    /// single shared numbering pool: the first local speaker is always `You`; every
+    /// Both channels are diarized independently and never share raw speaker IDs.
+    /// Labels are assigned in a single pass over the time-sorted stream, so numbers
+    /// are always contiguous: the first *local* speaker to appear is `You`; every
     /// other distinct voice — additional co-located locals and all remote speakers —
-    /// becomes `Speaker N`.
+    /// becomes `Speaker N` in order of first appearance.
     ///
     /// A solo-guard protects the common case: mic diarization is only applied when it
     /// confidently found at least two local speakers. With one (or none), every mic
     /// segment stays `You`, byte-identical to the pre-diarization behavior.
+    ///
+    /// Limitation: `You` is the *earliest-speaking* local voice, not necessarily the
+    /// device owner. Without voice enrollment we cannot tell co-located people apart,
+    /// so in a shared room whoever speaks first is labeled `You`. The live transcript
+    /// always labels local audio `You`; only this final pass can split it into
+    /// `Speaker N`, so a person shown as `You` live may become `Speaker N` here.
     static func merge(
         micSegments: [SpeechSegment],
         systemSegments: [SpeechSegment],
-        micDiarizationSegments: [TimedSpeakerSegment]?,
-        diarizationSegments: [TimedSpeakerSegment]?,
+        micDiarizationSegments: [TimedSpeakerSegment]? = nil,
+        diarizationSegments: [TimedSpeakerSegment]? = nil,
         meetingStart: Date
     ) -> String {
-        // Shared "Speaker N" counter across both channels. `You` is assigned to the
-        // first local speaker and does not consume a number.
+        // Solo-guard: only split the mic channel when diarization found >= 2 locals.
+        let useMicDiarization = Set((micDiarizationSegments ?? []).map(\.speakerId)).count >= 2
+
+        // Resolve each segment to a stable key: a channel-namespaced raw speaker id
+        // when diarized, otherwise a fixed label. Mic segments that match no
+        // diarization fall back to "You" — never "Others", which is remote-only.
+        enum SpeakerKey: Hashable {
+            case fixed(String)
+            case speaker(String)
+        }
+        func micKey(for segment: SpeechSegment) -> SpeakerKey {
+            guard useMicDiarization, let micDiarizationSegments,
+                  let rawId = findSpeakerRawId(for: segment, in: micDiarizationSegments)
+            else { return .fixed("You") }
+            return .speaker("mic:\(rawId)")
+        }
+        func systemKey(for segment: SpeechSegment) -> SpeakerKey {
+            guard let diarizationSegments, !diarizationSegments.isEmpty,
+                  let rawId = findSpeakerRawId(for: segment, in: diarizationSegments)
+            else { return .fixed("Others") }
+            return .speaker("sys:\(rawId)")
+        }
+
+        let keyed: [(segment: SpeechSegment, key: SpeakerKey)] =
+            micSegments.map { ($0, micKey(for: $0)) }
+            + systemSegments.map { ($0, systemKey(for: $0)) }
+        let sortedKeyed = keyed.sorted { $0.segment.start < $1.segment.start }
+
+        // The earliest local speaker is "You"; every other distinct voice gets a
+        // "Speaker N" assigned lazily in first-appearance order, so there are no gaps.
+        let youKey: SpeakerKey? = useMicDiarization
+            ? micDiarizationSegments?
+                .min(by: { $0.startTimeSeconds < $1.startTimeSeconds })
+                .map { SpeakerKey.speaker("mic:\($0.speakerId)") }
+            : nil
+        var labelForKey: [SpeakerKey: String] = [:]
         var nextSpeakerNumber = 1
-        func buildLabelMap(
-            _ segments: [TimedSpeakerSegment],
-            firstSpeakerIsYou: Bool
-        ) -> [String: String] {
-            var map: [String: String] = [:]
-            var assignYou = firstSpeakerIsYou
-            for seg in segments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
-                guard map[seg.speakerId] == nil else { continue }
-                if assignYou {
-                    map[seg.speakerId] = "You"
-                    assignYou = false
-                } else {
-                    map[seg.speakerId] = "Speaker \(nextSpeakerNumber)"
-                    nextSpeakerNumber += 1
-                }
+        func label(for key: SpeakerKey) -> String {
+            switch key {
+            case .fixed(let fixedLabel):
+                return fixedLabel
+            case .speaker:
+                if key == youKey { return "You" }
+                if let existing = labelForKey[key] { return existing }
+                let assigned = "Speaker \(nextSpeakerNumber)"
+                nextSpeakerNumber += 1
+                labelForKey[key] = assigned
+                return assigned
             }
-            return map
         }
 
-        let localSpeakerCount = Set((micDiarizationSegments ?? []).map(\.speakerId)).count
-        let taggedMic: [TaggedSegment]
-        if let micDiarizationSegments, localSpeakerCount >= 2 {
-            let micLabelMap = buildLabelMap(micDiarizationSegments, firstSpeakerIsYou: true)
-            taggedMic = micSegments.map { segment in
-                let speaker = findSpeaker(for: segment, in: micDiarizationSegments, labelMap: micLabelMap)
-                return TaggedSegment(segment: segment, speaker: speaker)
-            }
-        } else {
-            taggedMic = micSegments.map { TaggedSegment(segment: $0, speaker: "You") }
-        }
-
-        let taggedSystem: [TaggedSegment]
-        if let diarizationSegments, !diarizationSegments.isEmpty {
-            // Numbering continues after any local speakers assigned above.
-            let systemLabelMap = buildLabelMap(diarizationSegments, firstSpeakerIsYou: false)
-            taggedSystem = systemSegments.map { segment in
-                let speaker = findSpeaker(for: segment, in: diarizationSegments, labelMap: systemLabelMap)
-                return TaggedSegment(segment: segment, speaker: speaker)
-            }
-        } else {
-            taggedSystem = systemSegments.map { TaggedSegment(segment: $0, speaker: "Others") }
-        }
-
-        let tagged = (taggedMic + taggedSystem).sorted { $0.segment.start < $1.segment.start }
+        let tagged = sortedKeyed.map { TaggedSegment(segment: $0.segment, speaker: label(for: $0.key)) }
 
         // Consolidate consecutive segments from the same speaker into single lines
         let consolidated = consolidate(tagged)
@@ -148,14 +139,16 @@ enum TranscriptFormatter {
         return result
     }
 
-    /// Find the best-matching speaker for an ASR segment by time overlap with diarization segments.
-    private static func findSpeaker(
+    /// Best-matching raw diarization speaker id for an ASR segment, by time overlap,
+    /// falling back to the nearest speaker within 2s. Returns nil when nothing matches
+    /// (the caller decides the channel-appropriate fallback label).
+    private static func findSpeakerRawId(
         for segment: SpeechSegment,
-        in diarizationSegments: [TimedSpeakerSegment],
-        labelMap: [String: String]
-    ) -> String {
-        if labelMap.count == 1 {
-            return labelMap.values.first ?? "Others"
+        in diarizationSegments: [TimedSpeakerSegment]
+    ) -> String? {
+        let distinctSpeakers = Set(diarizationSegments.map(\.speakerId))
+        if distinctSpeakers.count == 1 {
+            return distinctSpeakers.first
         }
 
         let segStart = Float(segment.start)
@@ -176,17 +169,10 @@ enum TranscriptFormatter {
         }
 
         if let bestSpeakerId, bestOverlap > 0 {
-            return labelMap[bestSpeakerId] ?? "Others"
+            return bestSpeakerId
         }
 
-        if let nearestSpeakerId = nearestSpeaker(
-            for: segment,
-            in: diarizationSegments,
-            maxGapSeconds: 2.0
-        ) {
-            return labelMap[nearestSpeakerId] ?? "Others"
-        }
-        return "Others"
+        return nearestSpeaker(for: segment, in: diarizationSegments, maxGapSeconds: 2.0)
     }
 
 

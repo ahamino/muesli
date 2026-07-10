@@ -189,7 +189,8 @@ final class CalendarMonitor {
                 isAllDay: false,
                 source: .eventKit,
                 calendarID: event.calendar?.calendarIdentifier,
-                meetingURL: Self.extractMeetingURL(from: event)
+                meetingURL: Self.extractMeetingURL(from: event),
+                attendeeCount: event.attendees?.count
             )
         }
         return UnifiedCalendarEvent

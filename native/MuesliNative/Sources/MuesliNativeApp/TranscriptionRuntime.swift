@@ -422,19 +422,9 @@ actor TranscriptionCoordinator {
         let boundsLabel = speakerBounds.map { "\($0.minSpeakers)-\($0.maxSpeakers)" } ?? "none"
         fputs("[muesli-native] running offline speaker diarization (bounds=\(boundsLabel))...\n", stderr)
 
-        let community = OfflineDiarizerConfig.Clustering.community
-        let clustering = OfflineDiarizerConfig.Clustering(
-            threshold: community.threshold,
-            warmStartFa: community.warmStartFa,
-            warmStartFb: community.warmStartFb,
-            minSpeakers: speakerBounds?.minSpeakers,
-            maxSpeakers: speakerBounds?.maxSpeakers,
-            numSpeakers: nil
-        )
         let config = OfflineDiarizerConfig(
-            clustering: clustering,
             zeroVoteReembed: OfflineDiarizerConfig.ZeroVoteReembed(enabled: true)
-        )
+        ).withSpeakers(min: speakerBounds?.minSpeakers, max: speakerBounds?.maxSpeakers)
         let manager = OfflineDiarizerManager(config: config)
         manager.initialize(models: offlineDiarizerModels)
 

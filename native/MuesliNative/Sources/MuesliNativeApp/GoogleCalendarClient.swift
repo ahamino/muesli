@@ -542,6 +542,11 @@ final class GoogleCalendarClient {
                 if merged[idx].meetingURL == nil, gEvent.meetingURL != nil {
                     merged[idx].meetingURL = gEvent.meetingURL
                 }
+                // Likewise backfill the attendee count: EventKit often syncs Google
+                // events without attendees, but the Google API exposes them.
+                if merged[idx].attendeeCount == nil, gEvent.attendeeCount != nil {
+                    merged[idx].attendeeCount = gEvent.attendeeCount
+                }
             } else {
                 merged.append(gEvent)
             }

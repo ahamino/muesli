@@ -441,6 +441,23 @@ final class MuesliController: NSObject {
         }
     }
 
+    /// Reclaim the ~1.3 GB Qwen3 ASR model directory for users who downloaded it
+    /// before the backend was removed (FluidAudio dropped Qwen3 ASR in 0.15.3). The
+    /// model is no longer selectable and the Models UI no longer offers a delete path,
+    /// so this best-effort cleanup runs once on launch. No-op when the dir is absent.
+    private static func cleanupRemovedQwen3ASRModel() {
+        let fm = FileManager.default
+        let dir = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
+        guard fm.fileExists(atPath: dir.path) else { return }
+        do {
+            try fm.removeItem(at: dir)
+            fputs("[muesli-native] removed orphaned Qwen3 ASR model directory\n", stderr)
+        } catch {
+            fputs("[muesli-native] failed to remove orphaned Qwen3 ASR model: \(error)\n", stderr)
+        }
+    }
+
     func start() {
         hasStarted = true
         do {
@@ -450,6 +467,7 @@ final class MuesliController: NSObject {
         }
         recoverStaleLiveMeetings()
         normalizeMeetingTranscriptionSelectionForAvailability()
+        Self.cleanupRemovedQwen3ASRModel()
         SoundController.prewarmLifecycleSounds()
 
         // Clean up phantom aggregate devices left by a previous crash
@@ -1020,6 +1038,13 @@ final class MuesliController: NSObject {
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
         }) ?? .whisper
+        // Self-heal a dictation backend that no longer resolves (e.g. a removed model
+        // like the retired Qwen3 ASR), so the stale value isn't re-persisted or read
+        // by direct consumers. Mirrors the meeting-backend normalization below.
+        if BackendOption.resolve(backend: config.sttBackend, model: config.sttModel) == nil {
+            config.sttBackend = selectedBackend.backend
+            config.sttModel = selectedBackend.model
+        }
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
         })
