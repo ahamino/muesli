@@ -94,6 +94,35 @@ struct MeetingSessionResult {
     let templateSnapshot: MeetingTemplateSnapshot
 }
 
+extension MeetingSessionResult {
+    /// Returns a copy with transcript, notes, and optional timing overrides.
+    /// Used by the resume-recording flow to persist the merged transcript while
+    /// keeping the original meeting date and accumulating only recorded duration.
+    func overriding(
+        startTime newStartTime: Date? = nil,
+        durationSeconds newDurationSeconds: Double? = nil,
+        rawTranscript: String,
+        formattedNotes: String
+    ) -> MeetingSessionResult {
+        let resolvedStart = newStartTime ?? startTime
+        let resolvedDuration = newDurationSeconds ?? durationSeconds
+        return MeetingSessionResult(
+            title: title,
+            originalTitle: originalTitle,
+            calendarEventID: calendarEventID,
+            startTime: resolvedStart,
+            endTime: endTime,
+            durationSeconds: resolvedDuration,
+            rawTranscript: rawTranscript,
+            formattedNotes: formattedNotes,
+            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingError: retainedRecordingError,
+            systemRecordingURL: systemRecordingURL,
+            templateSnapshot: templateSnapshot
+        )
+    }
+}
+
 enum MeetingProcessingStage {
     case transcribingAudio
     case cleaningAudio
@@ -115,6 +144,7 @@ final class MeetingSession {
     private let backendLock = OSAllocatedUnfairLock(initialState: BackendOption.whisper)
     private let runtime: RuntimePaths
     private let config: AppConfig
+    private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
     private let neuralAec = MeetingNeuralAec()
@@ -141,6 +171,9 @@ final class MeetingSession {
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
+    /// Formatted notes of the predecessor meeting when this session records a
+    /// follow-up; injected into the summary prompt for action-item carry-forward.
+    var previousMeetingNotes: String?
     var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
@@ -168,6 +201,7 @@ final class MeetingSession {
         backend: BackendOption,
         runtime: RuntimePaths,
         config: AppConfig,
+        templateSnapshot: MeetingTemplateSnapshot,
         transcriptionCoordinator: TranscriptionCoordinator,
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder()
     ) {
@@ -176,6 +210,7 @@ final class MeetingSession {
         backendLock.withLock { $0 = backend }
         self.runtime = runtime
         self.config = config
+        self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
         if config.useCoreAudioTap {
@@ -484,10 +519,6 @@ final class MeetingSession {
             generatedTitle = title
         }
 
-        let templateSnapshot = MeetingTemplates.resolveSnapshot(
-            id: config.defaultMeetingTemplateID,
-            customTemplates: config.customMeetingTemplates
-        )
         let visualContext = await screenContextCollector.stopAndDrain()
         Self.logger.info("visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(self.config.useCoreAudioTap)")
         fputs("[meeting] visual context drained chars=\(visualContext.count) includedInPrompt=\(!visualContext.isEmpty) useOCR=\(config.useCoreAudioTap)\n", stderr)
@@ -502,7 +533,8 @@ final class MeetingSession {
                 template: templateSnapshot,
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
-                visualContext: visualContext.isEmpty ? nil : visualContext
+                visualContext: visualContext.isEmpty ? nil : visualContext,
+                previousMeetingNotes: previousMeetingNotes
             )
         } catch {
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)

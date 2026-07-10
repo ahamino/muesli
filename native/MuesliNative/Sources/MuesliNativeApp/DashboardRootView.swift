@@ -34,6 +34,16 @@ struct DashboardRootView: View {
                     controller.openContributionMilestoneAction(.buyMeCoffee)
                 }
             }
+            if appState.contributionMilestonePrompt?.showTweetAboutMuesli == true {
+                Button("Tweet about Muesli") {
+                    controller.openContributionMilestoneAction(.tweetAboutMuesli)
+                }
+            }
+            if appState.contributionMilestonePrompt?.showPostOnLinkedIn == true {
+                Button("Post about Muesli on LinkedIn") {
+                    controller.openContributionMilestoneAction(.postOnLinkedIn)
+                }
+            }
             Button("Later", role: .cancel) {
                 controller.dismissContributionMilestonePrompt()
             }
@@ -45,6 +55,18 @@ struct DashboardRootView: View {
         }
         .onChange(of: appState.contributionMilestonePrompt?.id) { _, _ in
             controller.recordContributionMilestonePromptSeen()
+        }
+        .sheet(
+            item: Binding<DiagnosticIncident?>(
+                get: { appState.pendingDiagnosticIncident },
+                set: { if $0 == nil { controller.dismissDiagnosticIncidentPrompt() } }
+            )
+        ) { incident in
+            DiagnosticIncidentReportView(
+                incident: incident,
+                onOpenIssue: { controller.openDiagnosticIncidentIssue(incident) },
+                onDismiss: { controller.dismissDiagnosticIncidentPrompt() }
+            )
         }
     }
 
@@ -81,7 +103,10 @@ struct DashboardRootView: View {
             case .settings:
                 SettingsView(appState: appState, controller: controller)
             case .about:
-                AboutView(appState: appState)
+                AboutView(
+                    appState: appState,
+                    onOpenManualDiagnosticReport: { controller.openManualDiagnosticReport() }
+                )
             }
         }
     }

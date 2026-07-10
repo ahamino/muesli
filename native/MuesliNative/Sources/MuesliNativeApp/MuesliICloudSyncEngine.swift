@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 import MuesliCore
+import Security
 
 struct ICloudSyncKindCounts: Equatable {
     private(set) var dictations = 0
@@ -283,6 +284,27 @@ final class MuesliICloudSyncEngine {
     private static let dirtyUploadBatchSize = 200
     private static let maxDirtyUploadBatchesPerSync = 50
 
+    static var hasRequiredEntitlement: Bool {
+        guard
+            let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.developer.icloud-container-identifiers" as CFString,
+                nil
+            )
+        else {
+            return false
+        }
+
+        if let containers = value as? [String] {
+            return containers.contains(Schema.containerIdentifier)
+        }
+        if let container = value as? String {
+            return container == Schema.containerIdentifier
+        }
+        return false
+    }
+
     init(
         container: CKContainer = CKContainer(identifier: Schema.containerIdentifier),
         changeTokenStore: ICloudChangeTokenStore = UserDefaultsICloudChangeTokenStore(),
@@ -305,11 +327,9 @@ final class MuesliICloudSyncEngine {
 
         let remoteChanges = try await fetchChangedTextRecords()
         var downloaded = ICloudSyncKindCounts()
-        for record in remoteChanges.records {
-            guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
-            if try store.upsertSyncedTextRecord(syncRecord) {
-                downloaded.increment(syncRecord.kind)
-            }
+        let remoteSyncRecords = remoteChanges.records.compactMap(Self.syncTextRecord(from:))
+        for syncRecord in try store.upsertSyncedTextRecords(remoteSyncRecords) {
+            downloaded.increment(syncRecord.kind)
         }
         if let finalToken = remoteChanges.finalToken {
             changeTokenStore.saveToken(finalToken)
@@ -490,17 +510,11 @@ final class MuesliICloudSyncEngine {
         guard !defaults.bool(forKey: Schema.migratedDefaultZoneKey) else { return }
 
         let legacyDefaultZoneRecords = try await fetchAllDefaultZoneTextRecords()
-        for record in legacyDefaultZoneRecords {
-            guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
-            _ = try store.upsertSyncedTextRecord(syncRecord)
-        }
+        _ = try store.upsertSyncedTextRecords(legacyDefaultZoneRecords.compactMap(Self.syncTextRecord(from:)))
 
         changeTokenStore.clearToken()
         let existingSyncZoneChanges = try await fetchChangedTextRecordsUsingStoredToken()
-        for record in existingSyncZoneChanges.records {
-            guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
-            _ = try store.upsertSyncedTextRecord(syncRecord)
-        }
+        _ = try store.upsertSyncedTextRecords(existingSyncZoneChanges.records.compactMap(Self.syncTextRecord(from:)))
         if let finalToken = existingSyncZoneChanges.finalToken {
             changeTokenStore.saveToken(finalToken)
         }
@@ -509,10 +523,7 @@ final class MuesliICloudSyncEngine {
 
         changeTokenStore.clearToken()
         let primedSyncZoneChanges = try await fetchChangedTextRecordsUsingStoredToken()
-        for record in primedSyncZoneChanges.records {
-            guard let syncRecord = Self.syncTextRecord(from: record) else { continue }
-            _ = try store.upsertSyncedTextRecord(syncRecord)
-        }
+        _ = try store.upsertSyncedTextRecords(primedSyncZoneChanges.records.compactMap(Self.syncTextRecord(from:)))
         if let finalToken = primedSyncZoneChanges.finalToken {
             changeTokenStore.saveToken(finalToken)
         }
@@ -959,6 +970,7 @@ final class MuesliICloudSyncEngine {
         cloud["source"] = record.source as NSString?
         cloud["localSource"] = record.localSource as NSString?
         cloud["meetingStatus"] = record.meetingStatus?.rawValue as NSString?
+        cloud["followUpToRecordName"] = record.followUpToRecordName as NSString?
         cloud["engineIdentifier"] = record.engineIdentifier as NSString?
         cloud["createdAt"] = record.createdAt as NSDate
         cloud["updatedAt"] = record.updatedAt as NSDate
@@ -974,6 +986,7 @@ final class MuesliICloudSyncEngine {
             cloud["speakerTranscript"] = nil as NSString?
             cloud["summaryText"] = nil as NSString?
             cloud["manualNotes"] = nil as NSString?
+            cloud["followUpToRecordName"] = nil as NSString?
             return cloud
         }
         cloud["title"] = record.title as NSString?
@@ -1021,7 +1034,8 @@ final class MuesliICloudSyncEngine {
             durationSeconds: (record["durationSeconds"] as? NSNumber)?.doubleValue ?? 0,
             wordCount: (record["wordCount"] as? NSNumber)?.intValue ?? 0,
             isDeleted: isDeleted,
-            cloudChangeTag: record.recordChangeTag
+            cloudChangeTag: record.recordChangeTag,
+            followUpToRecordName: record["followUpToRecordName"] as? String
         )
     }
 
@@ -1148,6 +1162,7 @@ final class MuesliICloudSyncEngine {
             "source",
             "localSource",
             "meetingStatus",
+            "followUpToRecordName",
             "engineIdentifier",
             "createdAt",
             "updatedAt",

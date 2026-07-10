@@ -147,6 +147,8 @@ cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
 cp "$ROOT/assets/AI4Bharat_logo.png" "$STAGED_APP_DIR/Contents/Resources/ai4bharat-logo.png"
 cp "$ROOT/assets/google-logo.svg" "$STAGED_APP_DIR/Contents/Resources/google-logo.svg"
+cp "$ROOT/assets/x-logo.png" "$STAGED_APP_DIR/Contents/Resources/x-logo.png"
+cp "$ROOT/assets/linkedin-logo.png" "$STAGED_APP_DIR/Contents/Resources/linkedin-logo.png"
 if [[ -d "$ROOT/assets/fonts" ]]; then
   ditto "$ROOT/assets/fonts" "$STAGED_APP_DIR/Contents/Resources/fonts"
 fi
@@ -209,6 +211,10 @@ fi
 mkdir -p "$INSTALL_DIR"
 rm -rf "$APP_DIR"
 ditto "$STAGED_APP_DIR" "$APP_DIR"
+
+# Checkouts under cloud-synced folders (OneDrive/Dropbox) tag files with Finder
+# metadata that codesign rejects as detritus; strip it before signing.
+xattr -cr "$APP_DIR" 2>/dev/null || true
 
 if [[ "$SKIP_SIGN" != "1" ]]; then
   if ! security find-identity -v -p codesigning | grep -Fq "$SIGN_IDENTITY"; then

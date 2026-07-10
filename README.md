@@ -5,6 +5,10 @@
 <h1 align="center">Muesli</h1>
 
 <p align="center">
+<a href="https://trendshift.io/repositories/25442?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25442" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25442" alt="Muesli-HQ%2Fmuesli | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <strong>Local-first dictation & meeting transcription for macOS</strong><br>
   100% on-device speech-to-text · Zero cloud costs · Privacy by default
 </p>
@@ -37,20 +41,24 @@ Start a meeting recording → Muesli captures your mic (You) and system audio (O
 ## Features
 
 - **Native Swift, zero Python** — Pure Swift app with CoreML and Metal backends. No bundled runtimes, no subprocess IPC.
-- **Multiple ASR models** — Parakeet TDT (Neural Engine), Cohere Transcribe 2B (mixed precision CoreML), Whisper Small/Medium/Large Turbo (CoreML/ANE via WhisperKit), and Qwen3 ASR (52 languages, CoreML).
+- **Multiple ASR models** — Parakeet TDT and Nemotron 3.5 (Neural Engine), Cohere Transcribe 2B (mixed precision CoreML), Whisper Tiny/Small/Medium/Large Turbo (CoreML/ANE via WhisperKit), Qwen3 ASR, SenseVoice Small, and Indic ASR.
 - **Hold-to-talk & hands-free** — Hold hotkey for quick dictation, or double-tap for sustained recording.
 - **Meeting recording** — Captures mic + system audio (including Bluetooth/AirPods) with a CoreAudio process tap by default and ScreenCaptureKit fallback. System audio from Zoom, Teams, and other call clients stays on the Others side of the transcript.
 - **VAD-driven chunk rotation** — Silero VAD detects natural speech boundaries in real-time, splitting mic audio at pauses instead of fixed intervals. No mid-sentence cuts.
 - **Speaker diarization** — Identifies individual speakers in system audio (Speaker 1, Speaker 2, etc.) using FluidAudio's pyannote-based CoreML diarization model.
 - **Camera-based meeting detection** — Detects when your webcam + mic activate in a recognized meeting app (Zoom, Chrome, Teams, FaceTime, Slack, WhatsApp). Camera alone (e.g. Photo Booth) won't trigger false positives.
 - **Join & Record** — Extracts meeting URLs from calendar events (Zoom, Google Meet, Teams, Webex, Chime, FaceTime). Split-button notification: "Join & Record" opens the meeting + starts recording, "Join Only" opens without recording, "Record Only" starts recording without joining. Platform icons (Zoom, Meet) in the notification panel.
-- **Google Calendar integration** — Connect your Google Calendar to see upcoming meetings in the Coming Up section and status bar. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
+- **Google Calendar integration** — Connect your Google Calendar to see upcoming meetings in the Coming Up section and status bar. Choose whether Muesli watches today, two days, or three days of upcoming events. Event-driven notifications via `EKEventStoreChangedNotification` for instant calendar change detection. Pre-meeting countdowns via Marauder's Map easter egg.
+- **Import Audio** — Import m4a, mp4, wav, or mp3 files for offline transcription, speaker diarization, title generation, summaries, and saved meeting history.
 - **Meeting export** — Export meeting notes or transcripts as PDF (paginated US Letter) or Markdown. Format picker in the save panel, auto-opens the exported file.
 - **Meeting templates** — Built-in and custom templates for meeting notes. Choose a template before or after recording — re-summarize any meeting with a different template.
 - **Dismiss calendar events** — Hide irrelevant events from Coming Up, status bar, and menu bar. Dismissed events are pruned automatically.
+- **iCloud Text Sync & iPhone Bridge** — Privately sync dictation text, meeting transcripts, notes, summaries, and manual notes with Muesli for iPhone through iCloud. Audio recordings are never synced.
 - **Filler word removal** — Automatically strips "uh", "um", "er", "hmm" and verbal disfluencies.
 - **AI meeting notes** — BYOK with OpenAI or OpenRouter, sign in with your ChatGPT Plus/Pro subscription (no API key needed), or use local Ollama models. Auto-generated meeting titles. Re-summarize any meeting.
 - **ChatGPT OAuth** — Sign in with your existing ChatGPT subscription via browser-based OAuth (PKCE). Tokens stored in the app support directory with owner-only file permissions.
+- **Computer Use planner** — Optional voice-driven planner that can execute local app and browser actions from dictated commands with configurable model and timeout settings.
+- **Post-meeting hooks** — Run a user-supplied executable after completed meetings. Hooks receive a JSON payload on stdin and log results in the app support directory.
 - **Personal dictionary** — Add custom words, phrase matches, and replacement pairs. Jaro-Winkler fuzzy matching auto-corrects transcription output.
 - **Model management** — Download, delete, and switch between models from the Models tab. Background downloads that don't block the app.
 - **Configurable hotkeys** — Choose any modifier key (Cmd, Option, Ctrl, Fn, Shift) for dictation.
@@ -71,9 +79,11 @@ Download the latest `.dmg` from [Releases](https://github.com/Muesli-HQ/muesli/r
 ### Homebrew
 
 ```bash
-brew tap Muesli-HQ/muesli
 brew install --cask muesli
 ```
+
+Current Homebrew also resolves `brew install muesli` to the official cask; the
+`--cask` form is shown to make the app install explicit.
 
 ### Build from source
 
@@ -106,8 +116,9 @@ Muesli bundles an agent-friendly local CLI inside the app bundle:
 
 - Installed path: `/Applications/Muesli.app/Contents/MacOS/muesli-cli`
 - Dev path: `native/MuesliNative/.build/arm64-apple-macosx/debug/muesli-cli`
+- Future Homebrew alias: `muesli` once the official cask exposes the bundled binary as a command
 
-The CLI is designed for coding agents such as Codex and Claude Code. It exposes meetings, dictations, raw transcripts, and stored notes as stable JSON so an agent can analyze them with its own model and write notes back without requiring a user-supplied OpenAI or OpenRouter key.
+The CLI is designed for coding agents such as Codex and Claude Code. It exposes meetings, dictations, raw transcripts, stored notes, and local audio-file transcription. Existing data commands return stable JSON so an agent can analyze them with its own model and write notes back without requiring a user-supplied OpenAI or OpenRouter key. `transcribe` prints plain transcript text by default so it works naturally in shell pipelines.
 
 ### What agents should do
 
@@ -119,18 +130,26 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
    ```bash
    /Applications/Muesli.app/Contents/MacOS/muesli-cli spec
    ```
-3. List recent meetings or dictations:
+3. Transcribe a local audio file:
+   ```bash
+   /Applications/Muesli.app/Contents/MacOS/muesli-cli transcribe file.mp3
+   ```
+   Homebrew users should eventually be able to use:
+   ```bash
+   muesli transcribe file.mp3
+   ```
+4. List recent meetings or dictations:
    ```bash
    /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings list --limit 10
    /Applications/Muesli.app/Contents/MacOS/muesli-cli dictations list --limit 10
    ```
-4. Fetch a full record:
+5. Fetch a full record:
    ```bash
    /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings get 125
    /Applications/Muesli.app/Contents/MacOS/muesli-cli dictations get 42
    ```
-5. Summarize or analyze locally in the agent.
-6. Write improved meeting notes back:
+6. Summarize or analyze locally in the agent.
+7. Write improved meeting notes back:
    ```bash
    cat notes.md | /Applications/Muesli.app/Contents/MacOS/muesli-cli meetings update-notes 125 --stdin
    ```
@@ -139,15 +158,75 @@ The CLI is designed for coding agents such as Codex and Claude Code. It exposes 
 
 - `muesli-cli spec`
 - `muesli-cli info`
+- `muesli-cli transcribe <file> [--format text|json|markdown] [--model parakeet-v3|parakeet-v2] [--summarize] [--save-meeting] [--title TITLE] [--output PATH]`
 - `muesli-cli meetings list [--limit N] [--folder-id ID]`
 - `muesli-cli meetings get <id>`
 - `muesli-cli meetings update-notes <id> (--stdin | --file <path>)`
 - `muesli-cli dictations list [--limit N]`
 - `muesli-cli dictations get <id>`
 
+### Audio transcription
+
+Supported input files: `.mp3`, `.mp4`, `.m4a`, and `.wav`.
+
+Default output is transcript text only:
+
+```bash
+muesli-cli transcribe interview.mp3
+```
+
+Agent-friendly JSON output uses the normal CLI envelope:
+
+```bash
+muesli-cli transcribe interview.m4a --format json
+```
+
+```json
+{
+  "ok": true,
+  "command": "muesli-cli transcribe",
+  "data": {
+    "transcript": "Raw transcript text...",
+    "summary": null,
+    "durationSeconds": 123.4,
+    "wordCount": 420,
+    "model": "parakeet-v3",
+    "warnings": [],
+    "savedMeetingID": null,
+    "title": "interview"
+  },
+  "meta": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-07-08T00:00:00Z",
+    "dbPath": "/Users/example/Library/Application Support/Muesli/muesli.db",
+    "warnings": []
+  }
+}
+```
+
+Generate markdown notes with the configured API/local summary backend when available:
+
+```bash
+muesli-cli transcribe interview.mp4 --summarize --format markdown --output notes.md
+```
+
+`--summarize` uses configured OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. If the configured backend is unavailable in headless CLI mode, Muesli keeps the transcript and reports a warning instead of discarding the transcription.
+
+Save the import into Muesli as `source = audio_import`:
+
+```bash
+muesli-cli transcribe interview.wav --save-meeting --title "Customer Interview"
+```
+
+Direct app-bundle fallback path:
+
+```bash
+/Applications/Muesli.app/Contents/MacOS/muesli-cli transcribe file.mp3
+```
+
 ### JSON contract
 
-All CLI commands return JSON on stdout.
+Data commands return JSON on stdout. `transcribe` returns plain text by default; pass `--format json` to use the envelope below.
 
 Success shape:
 
@@ -203,6 +282,7 @@ Important meeting fields:
 ### Notes for agent authors
 
 - The CLI is JSON-first and intended to be machine-consumed.
+- `transcribe` is text-first by default; use `--format json` for structured agent workflows.
 - `formattedNotes` is the only write-back surface in v1.
 - `rawTranscript` is read-only and should be treated as source material.
 - If `notesState` is `missing` or `raw_transcript_fallback`, agents should prefer summarizing from `rawTranscript`.
@@ -216,14 +296,17 @@ Important meeting fields:
 |-------|---------|---------|------|-----------|---------|
 | **Parakeet v3** (recommended) | FluidAudio | CoreML / Neural Engine | ~450 MB | 25 languages | ~0.13s |
 | Parakeet v2 | FluidAudio | CoreML / Neural Engine | ~450 MB | English only | ~0.13s |
-| **Cohere Transcribe 2B** | CoreML | FP16 encoder + INT8 decoder | ~3.8 GB | English | ~1s |
+| **Cohere Transcribe 2B** | CoreML | FP16 encoder + INT8 decoder | ~3.8 GB | 14 languages | ~1s |
+| Nemotron 3.5 Multilingual | FluidInference | CoreML / Neural Engine | ~665 MB | 100+ locales | Streaming |
 | SenseVoice Small | FluidAudio | INT8 CoreML / Neural Engine | ~240 MB | 50+ languages | ~1s |
 | Qwen3 ASR | FluidAudio | CoreML / Neural Engine | ~1.3 GB | 52 languages | ~2-3s |
-| Whisper Small | WhisperKit | CoreML / Neural Engine | ~190 MB | English only | ~1-2s |
+| Indic ASR | CoreML | RNNT | ~618 MB | 7 Indian languages | Experimental |
+| Whisper Tiny English | WhisperKit | CoreML / Neural Engine | ~153 MB | English only | Fastest setup |
+| Whisper Small | WhisperKit | CoreML / Neural Engine | ~250 MB | English only | ~1-2s |
 | Whisper Medium | WhisperKit | CoreML / Neural Engine | ~1.5 GB | English only | ~2-3s |
-| Whisper Large Turbo | WhisperKit | CoreML / Neural Engine | ~600 MB | Multilingual | ~2-4s |
+| Whisper Large Turbo | WhisperKit | CoreML / Neural Engine | ~626 MB | Multilingual | ~2-4s |
 
-Cohere Transcribe is a 2B parameter model (#1 on Open ASR Leaderboard) running in mixed precision — FP16 FastConformer encoder on the Neural Engine with INT8 quantized decoders. Includes VAD-gated silence detection to prevent hallucination. Best for high-accuracy English dictation.
+Cohere Transcribe is a 2B parameter model (#1 on Open ASR Leaderboard) running in mixed precision — FP16 FastConformer encoder on the Neural Engine with INT8 quantized decoders. Includes VAD-gated silence detection to prevent hallucination. Best for high-accuracy multilingual dictation.
 
 Meeting echo cancellation uses the bundled LocalVQE `localvqe-v1.2-1.3M-f32.gguf` model by default, so users do not need to download an AEC model before their first meeting transcription. DTLN remains available as the fallback AEC path.
 
@@ -251,8 +334,9 @@ Muesli needs these macOS permissions (guided during onboarding):
 | Component | Technology |
 |---|---|
 | App | Swift, AppKit, SwiftUI |
-| Primary ASR | [FluidAudio](https://github.com/FluidInference/FluidAudio) (Parakeet TDT, SenseVoice Small, and Qwen3 ASR on CoreML/ANE) |
+| Primary ASR | [FluidAudio](https://github.com/FluidInference/FluidAudio) and FluidInference models (Parakeet TDT, Nemotron 3.5, SenseVoice Small, and Qwen3 ASR on CoreML/ANE) |
 | Cohere ASR | [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) (FP16 encoder + INT8 decoder on CoreML) |
+| Indic ASR | AI4Bharat IndicConformer RNNT CoreML backend |
 | Whisper ASR | [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML/ANE) |
 | Voice activity | Silero VAD via FluidAudio (streaming, event-driven) |
 | Speaker diarization | pyannote via FluidAudio (CoreML on ANE) |
@@ -260,6 +344,8 @@ Muesli needs these macOS permissions (guided during onboarding):
 | System audio | CoreAudio process tap by default; ScreenCaptureKit (`SCStream`) fallback |
 | Meeting notes | OpenAI / OpenRouter (BYOK), ChatGPT subscription (OAuth), or Ollama |
 | Calendar | Google Calendar API (OAuth 2.0) |
+| Sync | CloudKit private database for text-only iCloud sync |
+| Automation | Computer Use planner and post-meeting executable hooks |
 | Export | PDF (NSPrintOperation, paginated US Letter) + Markdown |
 | Word correction | Jaro-Winkler similarity (native Swift) |
 | Storage | SQLite (WAL mode) |
@@ -279,7 +365,7 @@ swift test --package-path native/MuesliNative
 ./scripts/test_packaged_cli.sh
 ```
 
-684 tests covering model configuration, custom word and phrase matching, filler removal, transcription routing, data persistence, CLI contract/path-resolution logic, speaker diarization alignment, token consolidation, camera-based meeting detection, CoreAudio system capture, ChatGPT OAuth logic, Ollama summaries, update-flow policy, launch at login, paste/clipboard safety, meeting export, meeting navigation, and Google Calendar URL extraction.
+1,148 tests covering model configuration, custom word and phrase matching, filler removal, transcription routing, data persistence, CLI contract/path-resolution logic, speaker diarization alignment, token consolidation, camera-based meeting detection, CoreAudio system capture, ChatGPT OAuth logic, Ollama summaries, update-flow policy, launch at login, paste/clipboard safety, meeting export, meeting navigation, upcoming-meeting window behavior, and Google Calendar URL extraction.
 
 Current test scope:
 
@@ -321,6 +407,7 @@ Muesli has been possible because of the generosity of companies such as:
 - [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) — FastConformer TDT speech recognition model
 - [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) — 2B parameter autoregressive ASR (#1 Open ASR Leaderboard)
 - [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) — Multilingual speech recognition (52 languages)
+- [AI4Bharat IndicASR](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual) — IndicConformer multilingual ASR model for Indian languages
 - [pyannote](https://github.com/pyannote/pyannote-audio) — Speaker diarization (via FluidAudio CoreML conversion)
 
 ---

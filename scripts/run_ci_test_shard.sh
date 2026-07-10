@@ -60,6 +60,10 @@ case "${shard}" in
     filters=(
       MeetingDetectorTests
       MeetingRecordingWriterTests
+      MeetingResumePolicyTests
+      MeetingFollowUpPolicyTests
+      MeetingFollowUpThreadTests
+      MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
       MeetingsNavigationTests
       MeetingBrowserLogicTests
