@@ -487,6 +487,107 @@ struct TranscriptFormatterTests {
         #expect(lines.allSatisfy { $0.contains("Others:") })
     }
 
+    // MARK: - Per-channel (mic) diarization
+
+    @Test("solo mic with no mic diarization keeps every local segment as You")
+    func micSoloNoDiarization() {
+        let mic = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "one"),
+            SpeechSegment(start: 4.0, end: 6.0, text: "two"),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: [],
+            micDiarizationSegments: nil,
+            diarizationSegments: nil,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        let lines = result.components(separatedBy: "\n").filter { !$0.isEmpty }
+        #expect(lines.allSatisfy { $0.contains("You:") })
+    }
+
+    @Test("solo-guard: a single mic speaker stays You even with mic diarization")
+    func micSoloGuardSingleSpeaker() {
+        let mic = [SpeechSegment(start: 0.0, end: 2.0, text: "just me")]
+        let micDiar = [makeDiarSeg(speakerId: "A", start: 0.0, end: 2.0)]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: [],
+            micDiarizationSegments: micDiar,
+            diarizationSegments: nil,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("You: just me"))
+        #expect(!result.contains("Speaker"))
+    }
+
+    @Test("two people on one mic: first is You, second is Speaker 1")
+    func micTwoLocalSpeakers() {
+        let mic = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "hi im alice"),
+            SpeechSegment(start: 3.0, end: 5.0, text: "and im bob"),
+        ]
+        let micDiar = [
+            makeDiarSeg(speakerId: "A", start: 0.0, end: 2.0),
+            makeDiarSeg(speakerId: "B", start: 3.0, end: 5.0),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: [],
+            micDiarizationSegments: micDiar,
+            diarizationSegments: nil,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("You: hi im alice"))
+        #expect(result.contains("Speaker 1: and im bob"))
+    }
+
+    @Test("mic and system share one Speaker N pool, You reserved for local")
+    func micAndSystemSharedNumbering() {
+        let mic = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "local one"),
+            SpeechSegment(start: 3.0, end: 5.0, text: "local two"),
+        ]
+        let system = [SpeechSegment(start: 6.0, end: 8.0, text: "remote one")]
+        let micDiar = [
+            makeDiarSeg(speakerId: "A", start: 0.0, end: 2.0),
+            makeDiarSeg(speakerId: "B", start: 3.0, end: 5.0),
+        ]
+        let systemDiar = [makeDiarSeg(speakerId: "X", start: 6.0, end: 8.0)]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: system,
+            micDiarizationSegments: micDiar,
+            diarizationSegments: systemDiar,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        // Local: You + Speaker 1; remote continues the pool as Speaker 2.
+        #expect(result.contains("You: local one"))
+        #expect(result.contains("Speaker 1: local two"))
+        #expect(result.contains("Speaker 2: remote one"))
+    }
+
+    @Test("system-only diarization is unchanged (no mic diarization)")
+    func systemOnlyUnchanged() {
+        let system = [
+            SpeechSegment(start: 0.0, end: 2.0, text: "remote a"),
+            SpeechSegment(start: 3.0, end: 5.0, text: "remote b"),
+        ]
+        let systemDiar = [
+            makeDiarSeg(speakerId: "X", start: 0.0, end: 2.0),
+            makeDiarSeg(speakerId: "Y", start: 3.0, end: 5.0),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: [],
+            systemSegments: system,
+            micDiarizationSegments: nil,
+            diarizationSegments: systemDiar,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("Speaker 1: remote a"))
+        #expect(result.contains("Speaker 2: remote b"))
+    }
+
     // MARK: - Helpers
 
     private func makeDiarSeg(speakerId: String, start: Float, end: Float) -> TimedSpeakerSegment {

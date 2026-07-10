@@ -433,13 +433,29 @@ final class MeetingSession {
             try? FileManager.default.removeItem(at: lastSystemChunkURL)
         }
 
+        // A calendar event's attendee count, when available, constrains the speaker
+        // count on both channels so a crowded call doesn't over- or under-split.
+        let attendeeCount = await attendeeCountProvider?()
+        let speakerBounds = DiarizationSpeakerBounds.fromAttendeeCount(attendeeCount)
+
+        // Diarize the local (mic) channel too: multiple people can share one mic.
+        // Only worth the extra pass when the calendar suggests a multi-person
+        // meeting (speakerBounds present ⇒ ≥2 attendees) — solo and ad-hoc meetings
+        // are almost always one local speaker, so we skip the cost and keep "You".
+        // The formatter's solo-guard is a second line of defense if we do run it.
+        var micDiarizationSegments: [TimedSpeakerSegment]?
+        if let rawStreamingMicURL, speakerBounds != nil {
+            if let micDiarizationResult = try? await transcriptionCoordinator.diarize(
+                at: rawStreamingMicURL,
+                speakerBounds: speakerBounds
+            ) {
+                micDiarizationSegments = micDiarizationResult.segments
+            }
+        }
+
         var diarizationSegments: [TimedSpeakerSegment]?
         if let systemAudioURL {
             // Run speaker diarization on system audio (batch post-processing).
-            // A calendar event's attendee count, when available, constrains the
-            // speaker count so a crowded remote call doesn't over- or under-split.
-            let attendeeCount = await attendeeCountProvider?()
-            let speakerBounds = DiarizationSpeakerBounds.fromAttendeeCount(attendeeCount)
             if let diarizationResult = try? await transcriptionCoordinator.diarize(
                 at: systemAudioURL,
                 speakerBounds: speakerBounds
@@ -498,6 +514,7 @@ final class MeetingSession {
         let reconciledTranscriptInputs = TranscriptReconciler.reconcile(
             micTurns: micSegments,
             systemSegments: systemSegments,
+            micDiarizationSegments: micDiarizationSegments,
             diarizationSegments: diarizationSegments
         )
         let protectedTranscriptInputs = reconciledTranscriptInputs
@@ -505,6 +522,7 @@ final class MeetingSession {
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
+            micDiarizationSegments: protectedTranscriptInputs.micDiarizationSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             meetingStart: meetingStart
         )

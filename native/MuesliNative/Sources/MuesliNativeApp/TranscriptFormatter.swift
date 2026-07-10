@@ -15,25 +15,73 @@ enum TranscriptFormatter {
         diarizationSegments: [TimedSpeakerSegment]?,
         meetingStart: Date
     ) -> String {
-        // The formatter is intentionally source-agnostic: upstream capture decides
-        // which mic/system segments are valid, then this layer only labels/merges.
-        let displayMicSegments = micSegments
-        let taggedMic = displayMicSegments.map { TaggedSegment(segment: $0, speaker: "You") }
+        merge(
+            micSegments: micSegments,
+            systemSegments: systemSegments,
+            micDiarizationSegments: nil,
+            diarizationSegments: diarizationSegments,
+            meetingStart: meetingStart
+        )
+    }
 
-        let taggedSystem: [TaggedSegment]
-        if let diarizationSegments, !diarizationSegments.isEmpty {
-            // Build speaker label map: raw ID → "Speaker 1", "Speaker 2", etc. in first-appearance order
-            var speakerLabelMap: [String: String] = [:]
-            var nextSpeakerNumber = 1
-            for seg in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
-                if speakerLabelMap[seg.speakerId] == nil {
-                    speakerLabelMap[seg.speakerId] = "Speaker \(nextSpeakerNumber)"
+    /// Merge with optional per-channel speaker diarization.
+    ///
+    /// The mic (local) and system (remote) channels are diarized independently and
+    /// never share raw speaker IDs, so their label maps are built separately over a
+    /// single shared numbering pool: the first local speaker is always `You`; every
+    /// other distinct voice — additional co-located locals and all remote speakers —
+    /// becomes `Speaker N`.
+    ///
+    /// A solo-guard protects the common case: mic diarization is only applied when it
+    /// confidently found at least two local speakers. With one (or none), every mic
+    /// segment stays `You`, byte-identical to the pre-diarization behavior.
+    static func merge(
+        micSegments: [SpeechSegment],
+        systemSegments: [SpeechSegment],
+        micDiarizationSegments: [TimedSpeakerSegment]?,
+        diarizationSegments: [TimedSpeakerSegment]?,
+        meetingStart: Date
+    ) -> String {
+        // Shared "Speaker N" counter across both channels. `You` is assigned to the
+        // first local speaker and does not consume a number.
+        var nextSpeakerNumber = 1
+        func buildLabelMap(
+            _ segments: [TimedSpeakerSegment],
+            firstSpeakerIsYou: Bool
+        ) -> [String: String] {
+            var map: [String: String] = [:]
+            var assignYou = firstSpeakerIsYou
+            for seg in segments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
+                guard map[seg.speakerId] == nil else { continue }
+                if assignYou {
+                    map[seg.speakerId] = "You"
+                    assignYou = false
+                } else {
+                    map[seg.speakerId] = "Speaker \(nextSpeakerNumber)"
                     nextSpeakerNumber += 1
                 }
             }
+            return map
+        }
 
+        let localSpeakerCount = Set((micDiarizationSegments ?? []).map(\.speakerId)).count
+        let taggedMic: [TaggedSegment]
+        if let micDiarizationSegments, localSpeakerCount >= 2 {
+            let micLabelMap = buildLabelMap(micDiarizationSegments, firstSpeakerIsYou: true)
+            taggedMic = micSegments.map { segment in
+                let speaker = findSpeaker(for: segment, in: micDiarizationSegments, labelMap: micLabelMap)
+                return TaggedSegment(segment: segment, speaker: speaker)
+            }
+        } else {
+            taggedMic = micSegments.map { TaggedSegment(segment: $0, speaker: "You") }
+        }
+
+        let taggedSystem: [TaggedSegment]
+        if let diarizationSegments, !diarizationSegments.isEmpty {
+            // Numbering continues after any local speakers assigned above.
+            let systemLabelMap = buildLabelMap(diarizationSegments, firstSpeakerIsYou: false)
             taggedSystem = systemSegments.map { segment in
-                let speaker = findSpeaker(for: segment, in: diarizationSegments, labelMap: speakerLabelMap)
+                let speaker = findSpeaker(for: segment, in: diarizationSegments, labelMap: systemLabelMap)
                 return TaggedSegment(segment: segment, speaker: speaker)
             }
         } else {
