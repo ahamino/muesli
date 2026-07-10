@@ -1,0 +1,88 @@
+name: Sync from upstream
+
+# Keeps this fork current with Muesli-HQ/muesli:
+#   1. Fast-forwards the fork's pristine `main` to upstream (the "Sync fork" API).
+#   2. Merges the updated `main` into `personal` (your integration branch / default).
+# Runs daily and on demand. `main` stays a clean mirror you cut upstream PRs from;
+# `personal` is what CI builds into your app.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # daily ~07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout personal (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: personal
+          fetch-depth: 0
+
+      - name: Sync fork main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fast-forward this fork's `main` to the upstream parent's default branch.
+          # Non-zero usually just means "already up to date" — don't fail the run.
+          if gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main; then
+            echo "main synced from upstream"
+          else
+            echo "merge-upstream returned non-zero (likely already up to date)"
+          fi
+
+      - name: Merge updated main into personal
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main personal
+
+          if git merge --no-edit origin/main; then
+            if [ -n "$(git rev-list origin/personal..HEAD)" ]; then
+              git push origin HEAD:personal
+              echo "Merged main into personal and pushed."
+              # GITHUB_TOKEN pushes don't trigger `on: push`, so kick the build explicitly.
+              gh workflow run build-personal.yml --ref personal || true
+            else
+              echo "personal already up to date with main — nothing to push."
+            fi
+          else
+            git merge --abort
+            echo "Conflict merging main into personal — opening an issue for manual resolution."
+            TITLE="Auto-sync: merge conflict main -> personal"
+            EXISTING="$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')"
+            if [ -z "$EXISTING" ]; then
+              BODY="$(mktemp)"
+              cat > "$BODY" <<'EOF'
+          The scheduled upstream sync could not merge `main` into `personal` cleanly.
+
+          Resolve locally:
+
+          ```
+          git checkout personal
+          git fetch origin
+          git merge origin/main
+          # resolve conflicts, then:
+          git push origin personal
+          ```
+
+          Once pushed, the build workflow runs automatically.
+          EOF
+              gh issue create --title "$TITLE" --body-file "$BODY"
+            else
+              echo "Conflict issue #$EXISTING already open — not duplicating."
+            fi
+          fi

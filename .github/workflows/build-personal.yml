@@ -1,0 +1,105 @@
+name: Build personal app
+
+# Builds your `personal` integration branch into a runnable macOS app and publishes
+# it as a prerelease on this fork. Unsigned / ad-hoc (no Developer ID) — you clear the
+# quarantine flag once after download. Uses the canonical scripts/build_native_app.sh,
+# which bundles every framework (incl. llama.framework) so the app actually launches.
+
+on:
+  push:
+    branches: [personal]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label (e.g. 0.7.1-personal). Blank = date-based."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-personal
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out personal
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: meta
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -z "$V" ] && V="$(date +%Y.%m.%d)-personal.${GITHUB_RUN_NUMBER}"
+          TAG="personal-$(date +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building version $V (tag $TAG)"
+
+      - name: Run tests
+        run: swift test --package-path native/MuesliNative
+
+      - name: Build & package app (unsigned, ad-hoc)
+        env:
+          MUESLI_SKIP_SIGN: "1"
+          MUESLI_INSTALL_DIR: ${{ runner.temp }}/app
+          MUESLI_BUILD_VERSION: ${{ steps.meta.outputs.version }}
+        run: ./scripts/build_native_app.sh release
+
+      - name: Package DMG + zip
+        id: pkg
+        run: |
+          APP="${{ runner.temp }}/app/Muesli.app"
+          test -d "$APP" || { echo "::error::built app not found at $APP"; exit 1; }
+          OUT="dist-release"
+          mkdir -p "$OUT"
+          V="${{ steps.meta.outputs.version }}"
+          ZIP="$OUT/Muesli-${V}-unsigned.zip"
+          DMG="$OUT/Muesli-${V}-unsigned.dmg"
+
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+
+          STAGING="$(mktemp -d)"
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "Muesli" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+          rm -rf "$STAGING"
+
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Muesli-personal
+          path: |
+            ${{ steps.pkg.outputs.dmg }}
+            ${{ steps.pkg.outputs.zip }}
+          compression-level: 0
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="$(mktemp)"
+          cat > "$NOTES" <<'EOF'
+          Personal build of Muesli from this fork's `personal` branch.
+
+          **Unsigned / not notarized.** After downloading, clear the quarantine flag once before first launch:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/Muesli.app
+          ```
+
+          Then re-approve microphone / screen-recording / input-monitoring permissions if macOS prompts (ad-hoc signing changes the app identity).
+          EOF
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "Muesli Personal ${{ steps.meta.outputs.version }}" \
+            --notes-file "$NOTES" \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            "${{ steps.pkg.outputs.dmg }}" "${{ steps.pkg.outputs.zip }}"
