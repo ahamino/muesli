@@ -116,7 +116,8 @@ swift test --package-path native/MuesliNative \
 
 To mirror meetings/dictations to a new destination (Obsidian, a folder, a webhook, …),
 implement the `ExportTarget` protocol — the shared `ExportCoordinator` handles dirty-record
-tracking, idempotency, delete propagation, retries, and cross-device dedup for you. See
+tracking, idempotency, delete propagation, and cross-device dedup; the target owns
+destination-specific request and retry behavior. See
 [docs/export-targets.md](docs/export-targets.md) for the contract and a worked example.
 
 ## Pull Requests
