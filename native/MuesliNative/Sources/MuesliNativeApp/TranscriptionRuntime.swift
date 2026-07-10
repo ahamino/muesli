@@ -13,6 +13,36 @@ struct SpeechTranscriptionResult: Sendable {
     let segments: [SpeechSegment]
 }
 
+/// A loose `[min, max]` speaker-count constraint for offline diarization,
+/// typically derived from a calendar event's attendee count. Applied as a ceiling
+/// only — the diarizer detects the real count within the band. Exact counts are
+/// deliberately avoided because invitees are not the same as speakers.
+struct DiarizationSpeakerBounds: Sendable, Equatable {
+    let minSpeakers: Int
+    let maxSpeakers: Int
+
+    /// Upper clamp on the derived maximum. Diarization accuracy degrades as the
+    /// speaker count grows, and large invites (all-hands) rarely have more than a
+    /// handful of *active* speakers, so a 40-person invite must not set max=40.
+    static let maxSpeakerClamp = 8
+
+    /// Derive a loose constraint from a calendar event's attendee count.
+    ///
+    /// Used as a ceiling only: `minSpeakers = 1` (a channel may have a single
+    /// active speaker even in a crowded meeting), `maxSpeakers = min(count, clamp)`.
+    /// The count is a valid upper bound on the distinct voices in any single audio
+    /// channel — a channel cannot contain more speakers than the meeting has
+    /// attendees. We never set an exact count: no-shows, silent listeners, and
+    /// shared conference-room endpoints all push the true count below the invite.
+    ///
+    /// Returns `nil` (no constraint) when there is no usable signal: no linked
+    /// event, or a count of 0/1 that cannot distinguish speakers.
+    static func fromAttendeeCount(_ count: Int?) -> DiarizationSpeakerBounds? {
+        guard let count, count >= 2 else { return nil }
+        return DiarizationSpeakerBounds(minSpeakers: 1, maxSpeakers: min(count, maxSpeakerClamp))
+    }
+}
+
 actor TranscriptionCoordinator {
     static let explicitlyRoutedBackendIdentifiers: Set<String> = [
         "whisper", "nemotron35", "cohere", "indicasr", "sensevoice",
@@ -25,7 +55,10 @@ actor TranscriptionCoordinator {
     private var _indicASRTranscriber: Any?
     private let senseVoiceTranscriber = SenseVoiceTranscriber()
     private var vadManager: VadManager?
-    private var diarizerManager: DiarizerManager?
+    /// Offline diarization models are loaded once and reused. Speaker-count bounds
+    /// vary per meeting, so each diarization spins up a lightweight
+    /// `OfflineDiarizerManager` around these shared (already-compiled) models.
+    private var offlineDiarizerModels: OfflineDiarizerModels?
     private var activeBackend: String?
 
     private var _nemotron35Transcriber: Any?
@@ -215,13 +248,10 @@ actor TranscriptionCoordinator {
                 }
             }
 
-            if diarizerManager == nil {
+            if offlineDiarizerModels == nil {
                 do {
-                    let diarizer = DiarizerManager()
-                    let models = try await DiarizerModels.download()
-                    diarizer.initialize(models: models)
-                    diarizerManager = diarizer
-                    fputs("[muesli-native] Speaker diarization loaded\n", stderr)
+                    offlineDiarizerModels = try await OfflineDiarizerModels.load()
+                    fputs("[muesli-native] Offline speaker diarization models loaded\n", stderr)
                 } catch {
                     fputs("[muesli-native] Diarization load failed (non-critical): \(error)\n", stderr)
                 }
@@ -376,15 +406,41 @@ actor TranscriptionCoordinator {
         return cleanMeetingTranscript(try await route(url: url, backend: backend, cohereLanguage: cohereLanguage, indicASRLanguage: indicASRLanguage))
     }
 
-    func diarizeSystemAudio(at url: URL) async throws -> DiarizationResult? {
-        guard let diarizerManager, diarizerManager.isAvailable else {
+    /// Diarize a single-channel recording with the offline pipeline.
+    ///
+    /// `speakerBounds`, when provided (typically from a calendar event's attendee
+    /// count), is applied as a loose `[min, max]` ceiling on the clustering — the
+    /// diarizer still detects the actual count within the band. Exact counts are
+    /// intentionally never forced, because invitees are not the same as speakers.
+    /// The zero-vote re-embed post-pass (FluidAudio #751) is enabled to stop clean
+    /// speaker turns from being absorbed into a neighbor's segment.
+    func diarize(at url: URL, speakerBounds: DiarizationSpeakerBounds? = nil) async throws -> DiarizationResult? {
+        guard let offlineDiarizerModels else {
             fputs("[muesli-native] diarization not available, skipping\n", stderr)
             return nil
         }
-        fputs("[muesli-native] running speaker diarization on system audio...\n", stderr)
+        let boundsLabel = speakerBounds.map { "\($0.minSpeakers)-\($0.maxSpeakers)" } ?? "none"
+        fputs("[muesli-native] running offline speaker diarization (bounds=\(boundsLabel))...\n", stderr)
+
+        let community = OfflineDiarizerConfig.Clustering.community
+        let clustering = OfflineDiarizerConfig.Clustering(
+            threshold: community.threshold,
+            warmStartFa: community.warmStartFa,
+            warmStartFb: community.warmStartFb,
+            minSpeakers: speakerBounds?.minSpeakers,
+            maxSpeakers: speakerBounds?.maxSpeakers,
+            numSpeakers: nil
+        )
+        let config = OfflineDiarizerConfig(
+            clustering: clustering,
+            zeroVoteReembed: OfflineDiarizerConfig.ZeroVoteReembed(enabled: true)
+        )
+        let manager = OfflineDiarizerManager(config: config)
+        manager.initialize(models: offlineDiarizerModels)
+
         let converter = AudioConverter()
         let samples = try converter.resampleAudioFile(url)
-        let result = try diarizerManager.performCompleteDiarization(samples, sampleRate: 16000)
+        let result = try await manager.process(audio: samples)
         let speakerCount = Set(result.segments.map(\.speakerId)).count
         fputs("[muesli-native] diarization complete: \(result.segments.count) segments, \(speakerCount) speakers\n", stderr)
         return result
@@ -392,10 +448,6 @@ actor TranscriptionCoordinator {
 
     func getVadManager() -> VadManager? {
         vadManager
-    }
-
-    func getDiarizerManager() -> DiarizerManager? {
-        diarizerManager
     }
 
     func shutdown() async {

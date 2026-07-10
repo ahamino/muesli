@@ -171,6 +171,9 @@ final class MeetingSession {
     var onMicHealthChanged: ((MeetingMicHealthSnapshot) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var liveTitleProvider: (() async -> String?)?
+    /// Resolves the linked calendar event's attendee count, used to constrain
+    /// speaker diarization. Returns nil for ad-hoc meetings or when unavailable.
+    var attendeeCountProvider: (() async -> Int?)?
     var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
@@ -432,8 +435,15 @@ final class MeetingSession {
 
         var diarizationSegments: [TimedSpeakerSegment]?
         if let systemAudioURL {
-            // Run speaker diarization on system audio (batch post-processing)
-            if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
+            // Run speaker diarization on system audio (batch post-processing).
+            // A calendar event's attendee count, when available, constrains the
+            // speaker count so a crowded remote call doesn't over- or under-split.
+            let attendeeCount = await attendeeCountProvider?()
+            let speakerBounds = DiarizationSpeakerBounds.fromAttendeeCount(attendeeCount)
+            if let diarizationResult = try? await transcriptionCoordinator.diarize(
+                at: systemAudioURL,
+                speakerBounds: speakerBounds
+            ) {
                 diarizationSegments = diarizationResult.segments
             }
         }

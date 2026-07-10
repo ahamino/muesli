@@ -2110,6 +2110,18 @@ final class MuesliController: NSObject {
         appState.availableEventKitCalendars = calendarMonitor.availableCalendars()
     }
 
+    /// Best-effort attendee count for a meeting's linked calendar event, used to
+    /// constrain speaker diarization. Tries EventKit first (fresh lookup by the
+    /// event identifier), then falls back to a cached Google Calendar event.
+    /// Returns nil for ad-hoc meetings or when no attendee data is available.
+    private func attendeeCount(forCalendarEventID id: String?) -> Int? {
+        guard let id else { return nil }
+        if let eventKitCount = calendarMonitor.attendeeCount(forEventIdentifier: id) {
+            return eventKitCount
+        }
+        return appState.upcomingCalendarEvents.first { $0.id == id }?.attendeeCount
+    }
+
     /// Refresh the Google calendar list via the Calendar API. No-op when OAuth
     /// is not available or the user is not authenticated.
     func refreshGoogleCalendarList() async {
@@ -4793,6 +4805,12 @@ final class MuesliController: NSObject {
                     await MainActor.run {
                         guard let self else { return nil }
                         return self.liveMeetingTitle(id: meetingID)
+                    }
+                }
+                meetingSession.attendeeCountProvider = { [weak self] in
+                    await MainActor.run {
+                        guard let self else { return nil }
+                        return self.attendeeCount(forCalendarEventID: calendarEventID)
                     }
                 }
                 meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
