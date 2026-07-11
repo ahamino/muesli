@@ -86,8 +86,6 @@ final class FloatingMeetingTranscriptPanelController {
     private let onOpenNotes: () -> Void
     private let onDismiss: () -> Void
     private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
-    private var localMouseMonitor: Any?
-    private var globalMouseMonitor: Any?
 
     init(
         onHoverChanged: @escaping (Bool) -> Void,
@@ -124,11 +122,9 @@ final class FloatingMeetingTranscriptPanelController {
         hostingView.frame = frame
         hostingView.isHidden = false
         model.isPresented = true
-        startMouseMonitoring()
     }
 
     func hide() {
-        stopMouseMonitoring()
         model.isPresented = false
         hostingView?.isHidden = true
         hostingView?.removeFromSuperview()
@@ -140,7 +136,6 @@ final class FloatingMeetingTranscriptPanelController {
     }
 
     func close() {
-        stopMouseMonitoring()
         model.isPresented = false
         hostingView?.removeFromSuperview()
         hostingView = nil
@@ -156,36 +151,8 @@ final class FloatingMeetingTranscriptPanelController {
         return window.convertToScreen(frameInWindow)
     }
 
-    private func startMouseMonitoring() {
-        guard localMouseMonitor == nil, globalMouseMonitor == nil else { return }
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            let location = NSEvent.mouseLocation
-            let handled = MainActor.assumeIsolated {
-                self?.routeClick(at: location) ?? false
-            }
-            return handled ? nil : event
-        }
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            let location = NSEvent.mouseLocation
-            Task { @MainActor [weak self] in
-                _ = self?.routeClick(at: location)
-            }
-        }
-    }
-
-    private func stopMouseMonitoring() {
-        if let localMouseMonitor {
-            NSEvent.removeMonitor(localMouseMonitor)
-            self.localMouseMonitor = nil
-        }
-        if let globalMouseMonitor {
-            NSEvent.removeMonitor(globalMouseMonitor)
-            self.globalMouseMonitor = nil
-        }
-    }
-
     @discardableResult
-    private func routeClick(at screenPoint: NSPoint) -> Bool {
+    func handleClick(at screenPoint: NSPoint) -> Bool {
         guard let screenFrame,
               let interaction = FloatingMeetingTranscriptInteraction.action(
                 at: screenPoint,

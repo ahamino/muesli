@@ -12,8 +12,20 @@ enum FloatingIndicatorPointerIntent {
 }
 
 final class InteractiveFloatingPanel: NSPanel {
+    var leftMouseDownHandler: ((NSPoint) -> Bool)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            let screenPoint = convertPoint(toScreen: event.locationInWindow)
+            if leftMouseDownHandler?(screenPoint) == true {
+                return
+            }
+        }
+        super.sendEvent(event)
+    }
 }
 
 @MainActor
@@ -1216,7 +1228,7 @@ final class FloatingIndicatorController: NSObject {
     private func createPanel(config: AppConfig) {
         let panel = InteractiveFloatingPanel(
             contentRect: frameForState(.idle, config: config),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
@@ -1229,6 +1241,9 @@ final class FloatingIndicatorController: NSObject {
         panel.isMovableByWindowBackground = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.leftMouseDownHandler = { [weak self] screenPoint in
+            self?.meetingTranscriptPanel.handleClick(at: screenPoint) ?? false
+        }
 
         let containerView = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
         containerView.wantsLayer = true

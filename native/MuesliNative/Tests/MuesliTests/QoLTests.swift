@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 import Foundation
 import MuesliCore
@@ -237,13 +238,34 @@ struct FloatingMeetingTranscriptTests {
     func floatingPanelIsInteractive() {
         let panel = InteractiveFloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
+        var receivedMouseDown = false
+        panel.leftMouseDownHandler = { _ in
+            receivedMouseDown = true
+            return true
+        }
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 20, y: 20),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: panel.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        )
+        if let event {
+            panel.sendEvent(event)
+        }
 
         #expect(panel.canBecomeKey)
         #expect(!panel.canBecomeMain)
+        #expect(!panel.styleMask.contains(.nonactivatingPanel))
+        #expect(receivedMouseDown)
     }
 
     @Test("panel prefers the open side and remains inside the screen")
