@@ -88,7 +88,12 @@ enum MeetingLiveCaptionModelStore {
 protocol MeetingStreamingPartialEngine: AnyObject, Sendable {
     func setPartialHandler(_ handler: @escaping @Sendable (String) -> Void) async
     func process(samples: [Float]) async throws
+    func finish() async throws
     func shutdown() async
+}
+
+extension MeetingStreamingPartialEngine {
+    func finish() async throws {}
 }
 
 private actor ParakeetEOUMeetingPartialEngine: MeetingStreamingPartialEngine {
@@ -172,6 +177,25 @@ private actor Nemotron35MeetingPartialEngine: MeetingStreamingPartialEngine {
             guard !text.isEmpty else { continue }
             transcript += text
             partialHandler?(transcript)
+        }
+    }
+
+    func finish() async throws {
+        guard !sampleBuffer.isEmpty else { return }
+        let chunkSize = transcriber.chunkSamples
+        sampleBuffer.append(contentsOf: repeatElement(0, count: max(chunkSize - sampleBuffer.count, 0)))
+        if sampleBuffer.count >= chunkSize {
+            let chunk = Array(sampleBuffer.prefix(chunkSize))
+            sampleBuffer.removeFirst(chunkSize)
+            guard var state = streamState else {
+                throw Nemotron35StreamingTranscriber.TranscriberError.notLoaded
+            }
+            let text = try await transcriber.transcribeChunk(samples: chunk, state: &state)
+            streamState = state
+            if !text.isEmpty {
+                transcript += text
+                partialHandler?(transcript)
+            }
         }
     }
 
@@ -310,6 +334,38 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     func resume() {
         state.withLock { s in
             s.isSuspended = false
+        }
+    }
+
+    func finish() async -> String? {
+        let shouldDrain = state.withLock { s -> Bool in
+            guard !s.isStopped, !s.isSuspended, !s.didFail else { return false }
+            if !s.sampleBuffer.isEmpty {
+                s.sampleBuffer.append(contentsOf: repeatElement(0, count: Self.feedSamples - s.sampleBuffer.count))
+                s.chunkQueue.append(s.sampleBuffer)
+                s.sampleBuffer.removeAll(keepingCapacity: true)
+            }
+            guard !s.chunkQueue.isEmpty, !s.isDraining else { return false }
+            s.isDraining = true
+            return true
+        }
+        if shouldDrain {
+            await drain()
+        } else {
+            while state.withLock({ $0.isDraining || !$0.chunkQueue.isEmpty }) {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
+        guard !state.withLock({ $0.didFail || $0.isStopped }) else { return nil }
+        do {
+            try await engine.finish()
+        } catch {
+            goDormant(error: error)
+            return nil
+        }
+        return state.withLock { s in
+            let text = visibleTail(for: s).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
         }
     }
 

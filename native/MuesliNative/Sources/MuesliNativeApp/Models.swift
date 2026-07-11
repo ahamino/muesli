@@ -69,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual",
         sizeLabel: "~665 MB",
-        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). Append-only — no corrections.",
+        description: "Multilingual streaming RNNT via FluidInference. For meetings, one continuous transcript is used live and as the final raw transcript. Also supports hands-free dictation. Native punctuation; append-only with no corrections.",
         recommended: false
     )
 
@@ -297,6 +297,13 @@ enum MeetingLiveCaptionBackend: String, CaseIterable, Codable, Sendable {
         switch self {
         case .parakeetRealtimeEOU: return MeetingLiveCaptionModelStore.label
         case .nemotron35: return BackendOption.nemotron35Multilingual.label
+        }
+    }
+
+    var settingsLabel: String {
+        switch self {
+        case .parakeetRealtimeEOU: return "\(label) (live preview only)"
+        case .nemotron35: return "\(label) (live + final)"
         }
     }
 

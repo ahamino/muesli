@@ -161,7 +161,7 @@ struct ModelsView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
 
-                Text("Low-latency models for hands-free dictation and live meeting captions.")
+                Text("Choose one live meeting transcript model. Nemotron is live + final; Parakeet is live preview only.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
             }
@@ -206,7 +206,7 @@ struct ModelsView: View {
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
 
-                    Text("Low-latency English captions while a meeting is still in progress. Final transcripts continue using your selected meeting model.")
+                    Text("Low-latency English preview while a meeting is in progress. A separate meeting model creates the final transcript.")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }

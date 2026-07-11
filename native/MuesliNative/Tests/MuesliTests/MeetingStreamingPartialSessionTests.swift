@@ -219,6 +219,21 @@ struct MeetingStreamingPartialSessionTests {
         #expect(await remainsTrue { collector.all.count == updatesBefore && engine.processCalls == 1 })
     }
 
+    @Test("finish drains residual audio and returns the finalized tail")
+    func finishDrainsResidualAudio() async throws {
+        let engine = ScriptedPartialEngine(script: ["partial"], finishText: "partial final")
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        await session.connect()
+
+        session.enqueue([Float](repeating: 0, count: MeetingStreamingPartialSession.feedSamples - 1))
+
+        let tail = await session.finish()
+
+        #expect(engine.processCalls == 1)
+        #expect(engine.finishCalls == 1)
+        #expect(tail == "partial final")
+    }
+
     @Test("backpressure keeps only the freshest EOU feed intervals")
     func backpressureDropsOldestChunks() async throws {
         let engine = EchoPartialEngine()
@@ -244,17 +259,20 @@ struct MeetingStreamingPartialSessionTests {
 private final class ScriptedPartialEngine: MeetingStreamingPartialEngine, @unchecked Sendable {
     private struct State {
         var script: [String]
+        var finishText: String?
         var handler: (@Sendable (String) -> Void)?
         var processCalls = 0
+        var finishCalls = 0
         var shutdownCalls = 0
     }
     private let state: OSAllocatedUnfairLock<State>
 
-    init(script: [String]) {
-        state = OSAllocatedUnfairLock(initialState: State(script: script))
+    init(script: [String], finishText: String? = nil) {
+        state = OSAllocatedUnfairLock(initialState: State(script: script, finishText: finishText))
     }
 
     var processCalls: Int { state.withLock { $0.processCalls } }
+    var finishCalls: Int { state.withLock { $0.finishCalls } }
 
     func setPartialHandler(_ handler: @escaping @Sendable (String) -> Void) async {
         state.withLock { $0.handler = handler }
@@ -265,6 +283,17 @@ private final class ScriptedPartialEngine: MeetingStreamingPartialEngine, @unche
             s.processCalls += 1
             guard !s.script.isEmpty else { return nil }
             return (s.script.removeFirst(), s.handler)
+        }
+        if let update {
+            update.1?(update.0)
+        }
+    }
+
+    func finish() async throws {
+        let update: (String, (@Sendable (String) -> Void)?)? = state.withLock { s in
+            s.finishCalls += 1
+            guard let finishText = s.finishText else { return nil }
+            return (finishText, s.handler)
         }
         if let update {
             update.1?(update.0)

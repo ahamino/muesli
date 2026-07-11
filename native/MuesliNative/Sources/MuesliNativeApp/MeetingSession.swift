@@ -67,6 +67,17 @@ final class MeetingChunkCollector {
         }
     }
 
+    func waitUntilRetired() async {
+        while true {
+            let tasks = lock.withLock { $0.pendingTasks.map(\.task) }
+            guard !tasks.isEmpty else { return }
+            for task in tasks {
+                _ = await task.value
+            }
+            await Task.yield()
+        }
+    }
+
     func cancelAll() {
         let tasksToCancel = lock.withLock { state in
             state.isClosed = true
@@ -498,9 +509,13 @@ final class MeetingSession {
         let endTime = Date()
         var micSegments: [SpeechSegment] = []
         var systemSegments: [SpeechSegment] = []
+        let usesUnifiedNemotronTranscript = config.enableLiveStreamingPartials
+            && config.resolvedMeetingLiveCaptionBackend == .nemotron35
 
         // Stop VAD controller
-        stopPartialSessions()
+        if !usesUnifiedNemotronTranscript {
+            stopPartialSessions()
+        }
         vadController?.stop()
         vadController = nil
         systemVadController?.stop()
@@ -535,39 +550,70 @@ final class MeetingSession {
         // Stop system audio
         let systemAudioURL = systemAudioRecorder.stop()
 
-        // Transcribe last mic chunk
-        let finalMicSegments = await transcribeMicChunk(
-            rawURL: lastRawMicURL,
-            chunkTiming: lastChunkTiming,
-            isFinalChunk: true
-        )
-        micSegments.append(contentsOf: finalMicSegments)
+        if usesUnifiedNemotronTranscript {
+            async let micRetirement: Void = micChunkCollector.waitUntilRetired()
+            async let systemRetirement: Void = systemChunkCollector.waitUntilRetired()
+            _ = await (micRetirement, systemRetirement)
+
+            async let micTail = micPartialSession()?.finish()
+            async let systemTail = systemPartialSession()?.finish()
+            let (finalMicText, finalSystemText) = await (micTail, systemTail)
+            if let finalMicText, let timing = lastChunkTiming {
+                micSegments.append(SpeechSegment(
+                    start: timing.startTimeSeconds,
+                    end: timing.startTimeSeconds + max(timing.durationSeconds, 0.1),
+                    text: finalMicText
+                ))
+            }
+            if let finalSystemText, let timing = lastSystemChunkTiming {
+                systemSegments.append(SpeechSegment(
+                    start: timing.startTimeSeconds,
+                    end: timing.startTimeSeconds + max(timing.durationSeconds, 0.1),
+                    text: finalSystemText
+                ))
+            }
+            stopPartialSessions()
+        }
+
+        // The configured meeting model fills only a tail Nemotron could not finalize.
+        if !usesUnifiedNemotronTranscript || micSegments.isEmpty {
+            let finalMicSegments = await transcribeMicChunk(
+                rawURL: lastRawMicURL,
+                chunkTiming: lastChunkTiming,
+                isFinalChunk: true
+            )
+            micSegments.append(contentsOf: finalMicSegments)
+        } else if let lastRawMicURL {
+            try? FileManager.default.removeItem(at: lastRawMicURL)
+        }
 
         if let lastSystemChunkURL {
             let chunkOffset = lastSystemChunkTiming?.startTimeSeconds ?? 0
             let chunkDuration = lastSystemChunkTiming?.durationSeconds ?? 0
-            fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
-            do {
-                let result = try await transcriptionCoordinator.transcribeMeetingChunk(
-                    at: lastSystemChunkURL,
-                    backend: currentBackend(),
-                    cohereLanguage: config.resolvedCohereLanguage,
-                    indicASRLanguage: config.resolvedIndicASRLanguage
-                )
-                let normalizedSegments = normalizeSystemTranscription(
-                    result: result,
-                    startTime: chunkOffset,
-                    endTime: chunkOffset + max(chunkDuration, 0.1)
-                )
-                if normalizedSegments.isEmpty {
-                    systemChunkHealthTracker.noteEmptyChunk()
-                } else {
-                    systemChunkHealthTracker.noteSuccessfulChunk()
+            if !usesUnifiedNemotronTranscript || systemSegments.isEmpty {
+                fputs("[meeting] transcribing final system chunk (offset=\(String(format: "%.0f", chunkOffset))s)\n", stderr)
+                do {
+                    let result = try await transcriptionCoordinator.transcribeMeetingChunk(
+                        at: lastSystemChunkURL,
+                        backend: currentBackend(),
+                        cohereLanguage: config.resolvedCohereLanguage,
+                        indicASRLanguage: config.resolvedIndicASRLanguage
+                    )
+                    let normalizedSegments = normalizeSystemTranscription(
+                        result: result,
+                        startTime: chunkOffset,
+                        endTime: chunkOffset + max(chunkDuration, 0.1)
+                    )
+                    if normalizedSegments.isEmpty {
+                        systemChunkHealthTracker.noteEmptyChunk()
+                    } else {
+                        systemChunkHealthTracker.noteSuccessfulChunk()
+                    }
+                    systemSegments.append(contentsOf: normalizedSegments)
+                } catch {
+                    systemChunkHealthTracker.noteFailedChunk()
+                    fputs("[meeting] final system chunk transcription failed: \(error)\n", stderr)
                 }
-                systemSegments.append(contentsOf: normalizedSegments)
-            } catch {
-                systemChunkHealthTracker.noteFailedChunk()
-                fputs("[meeting] final system chunk transcription failed: \(error)\n", stderr)
             }
             try? FileManager.default.removeItem(at: lastSystemChunkURL)
         }
@@ -596,7 +642,7 @@ final class MeetingSession {
             return lhs.start < rhs.start
         }
 
-        if let systemAudioURL {
+        if let systemAudioURL, !usesUnifiedNemotronTranscript {
             let systemRecovery = await repairSystemSegmentsIfNeeded(
                 existingSystemSegments: systemSegments,
                 systemAudioURL: systemAudioURL,

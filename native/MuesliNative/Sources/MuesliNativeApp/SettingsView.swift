@@ -136,7 +136,12 @@ struct SettingsView: View {
               downloadedMeetingLiveCaptionBackends.contains(selected) else {
             return "Off"
         }
-        return selected.label
+        return selected.settingsLabel
+    }
+
+    private var usesUnifiedMeetingTranscript: Bool {
+        appState.config.enableLiveStreamingPartials
+            && appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35
     }
 
     private var selectedMeetingBackendLabel: String {
@@ -174,6 +179,10 @@ struct SettingsView: View {
 
     private var selectedIndicASRLanguage: IndicASRLanguage {
         appState.config.resolvedIndicASRLanguage
+    }
+
+    private var selectedNemotron35Language: Nemotron35Language {
+        appState.config.resolvedNemotron35Language
     }
 
     private var dictationMicrophoneOptions: [DictationMicrophoneOption] {
@@ -632,8 +641,46 @@ struct SettingsView: View {
 
     private var meetingTranscriptionSettingsSection: some View {
         settingsSection("Transcription") {
-            settingsRow("Meeting model", controlWidth: meetingControlWidth) {
-                if meetingBackendOptions.isEmpty {
+            settingsRow(
+                "Live transcript",
+                description: usesUnifiedMeetingTranscript
+                    ? "Nemotron transcribes continuously and becomes the final raw transcript."
+                    : "Parakeet provides a low-latency preview; the final model transcribes separately.",
+                controlWidth: meetingControlWidth
+            ) {
+                if !downloadedMeetingLiveCaptionBackends.isEmpty {
+                    settingsMenu(
+                        selection: selectedMeetingLiveCaptionLabel,
+                        options: downloadedMeetingLiveCaptionBackends.map(\.settingsLabel) + ["Off"]
+                    ) { label in
+                        guard label != "Off" else {
+                            controller.updateConfig { $0.enableLiveStreamingPartials = false }
+                            return
+                        }
+                        guard let backend = downloadedMeetingLiveCaptionBackends.first(where: { $0.settingsLabel == label }) else {
+                            return
+                        }
+                        controller.updateConfig {
+                            $0.meetingLiveCaptionBackend = backend.rawValue
+                            $0.enableLiveStreamingPartials = true
+                        }
+                    }
+                } else {
+                    Text("Download from Models")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
+                }
+            }
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Final transcript", controlWidth: meetingControlWidth) {
+                if usesUnifiedMeetingTranscript {
+                    Text("\(MeetingLiveCaptionBackend.nemotron35.label) (same model)")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
+                } else if meetingBackendOptions.isEmpty {
                     Text("No downloaded models")
                         .font(MuesliTheme.body())
                         .foregroundStyle(MuesliTheme.textTertiary)
@@ -649,47 +696,20 @@ struct SettingsView: View {
                     }
                 }
             }
-            if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.cohereTranscribe.backend {
+            if usesUnifiedMeetingTranscript {
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Language", controlWidth: meetingControlWidth) {
+                    nemotron35LanguageMenu
+                }
+            } else if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.cohereTranscribe.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Cohere language", controlWidth: meetingControlWidth) {
                     cohereLanguageMenu
                 }
-            }
-            if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.indicASR.backend {
+            } else if appState.selectedMeetingTranscriptionBackend.backend == BackendOption.indicASR.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Indic language", controlWidth: meetingControlWidth) {
                     indicLanguageMenu
-                }
-            }
-            Divider().background(MuesliTheme.surfaceBorder)
-            settingsRow(
-                "Live caption model",
-                description: "Provides provisional captions during a meeting. The meeting model remains the final transcript source.",
-                controlWidth: meetingControlWidth
-            ) {
-                if !downloadedMeetingLiveCaptionBackends.isEmpty {
-                    settingsMenu(
-                        selection: selectedMeetingLiveCaptionLabel,
-                        options: downloadedMeetingLiveCaptionBackends.map(\.label) + ["Off"]
-                    ) { label in
-                        guard label != "Off" else {
-                            controller.updateConfig { $0.enableLiveStreamingPartials = false }
-                            return
-                        }
-                        guard let backend = downloadedMeetingLiveCaptionBackends.first(where: { $0.label == label }) else {
-                            return
-                        }
-                        controller.updateConfig {
-                            $0.meetingLiveCaptionBackend = backend.rawValue
-                            $0.enableLiveStreamingPartials = true
-                        }
-                    }
-                } else {
-                    Text("Download from Models")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: meetingControlWidth, alignment: .trailing)
                 }
             }
         }
@@ -747,6 +767,16 @@ struct SettingsView: View {
         ) { label in
             guard let language = CohereTranscribeLanguage.allCases.first(where: { $0.label == label }) else { return }
             controller.selectCohereLanguage(language)
+        }
+    }
+
+    private var nemotron35LanguageMenu: some View {
+        settingsMenu(
+            selection: selectedNemotron35Language.label,
+            options: Nemotron35Language.allCases.map(\.label)
+        ) { label in
+            guard let language = Nemotron35Language.allCases.first(where: { $0.label == label }) else { return }
+            Task { await controller.setNemotron35Language(language) }
         }
     }
 
