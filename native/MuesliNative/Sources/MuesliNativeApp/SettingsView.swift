@@ -86,6 +86,7 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane = .general
     @State private var downloadedBackendOptions: [BackendOption] = []
     @State private var downloadedPostProcOptions: [PostProcessorOption] = []
+    @State private var isLiveCaptionModelDownloaded = false
     @State private var dictationInputDevices: [AudioInputDeviceInfo] = []
     @State private var permissionPollTimer: Timer?
     @State private var isCleanupPromptManagerPresented = false
@@ -281,6 +282,7 @@ struct SettingsView: View {
         controller.refreshMeetingTranscriptionSelectionForAvailability()
         downloadedBackendOptions = BackendOption.downloaded
         downloadedPostProcOptions = PostProcessorOption.downloaded
+        isLiveCaptionModelDownloaded = MeetingLiveCaptionModelStore.isDownloaded()
     }
 
     private func refreshDictationInputDevices() {
@@ -648,6 +650,31 @@ struct SettingsView: View {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Indic language", controlWidth: meetingControlWidth) {
                     indicLanguageMenu
+                }
+            }
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow(
+                "Live caption model",
+                description: "Provides provisional captions during a meeting. The meeting model remains the final transcript source.",
+                controlWidth: meetingControlWidth
+            ) {
+                if isLiveCaptionModelDownloaded {
+                    settingsMenu(
+                        selection: appState.config.enableLiveStreamingPartials
+                            ? MeetingLiveCaptionModelStore.label
+                            : "Off",
+                        options: [MeetingLiveCaptionModelStore.label, "Off"]
+                    ) { label in
+                        controller.updateConfig {
+                            $0.enableLiveStreamingPartials = label == MeetingLiveCaptionModelStore.label
+                        }
+                    }
+                } else {
+                    Text("Download from Models")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: meetingControlWidth, alignment: .trailing)
                 }
             }
         }

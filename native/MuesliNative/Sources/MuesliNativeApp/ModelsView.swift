@@ -180,7 +180,9 @@ struct ModelsView: View {
     }
 
     private var liveCaptionModelCard: some View {
-        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+        let isActive = isLiveCaptionModelDownloaded && appState.config.enableLiveStreamingPartials
+
+        return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
                 brandLogo("nvidia-logo")
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
@@ -201,13 +203,21 @@ struct ModelsView: View {
 
                 Spacer()
 
-                if isLiveCaptionModelDownloaded {
-                    Text("Ready")
+                if isActive {
+                    Text("Active")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.success)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(MuesliTheme.success.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                } else if isLiveCaptionModelDownloaded {
+                    Text("Ready")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.surfacePrimary)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
             }
@@ -234,6 +244,19 @@ struct ModelsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textSecondary)
                 } else if isLiveCaptionModelDownloaded {
+                    if !isActive {
+                        Button("Set Active") {
+                            controller.updateConfig { $0.enableLiveStreamingPartials = true }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, 4)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+
                     Button {
                         showDeleteLiveCaptionModelConfirmation = true
                     } label: {
@@ -263,7 +286,7 @@ struct ModelsView: View {
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
         .overlay(
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.6) : MuesliTheme.surfaceBorder, lineWidth: 1)
         )
     }
 
@@ -295,6 +318,7 @@ struct ModelsView: View {
         do {
             try MeetingLiveCaptionModelStore.delete()
             isLiveCaptionModelDownloaded = false
+            controller.updateConfig { $0.enableLiveStreamingPartials = false }
         } catch {
             fputs("[muesli-native] live caption model delete failed: \(error)\n", stderr)
         }
