@@ -1085,8 +1085,8 @@ struct AppConfig: Codable {
     var enableScreenContext: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
-    /// Display-only streaming partials in the live meeting transcript.
-    var enableLiveStreamingPartials: Bool = true
+    /// Enables the explicitly selected live meeting transcription mode.
+    var enableLiveStreamingPartials: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.

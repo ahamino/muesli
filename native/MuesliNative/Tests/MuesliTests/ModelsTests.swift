@@ -571,7 +571,7 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
-        #expect(config.enableLiveStreamingPartials == true)
+        #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.showMeetingTranscriptOnIndicatorHover == true)
         #expect(config.dictationHotkey == .default)
@@ -787,7 +787,7 @@ struct AppConfigTests {
         config.postProcessorSystemPrompt = "Preserve labels and quotes."
         config.enableScreenContext = true
         config.enableDictationOCRContext = true
-        config.enableLiveStreamingPartials = false
+        config.enableLiveStreamingPartials = true
         config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
         config.showMeetingTranscriptOnIndicatorHover = false
         config.contributionPromptNextWordCount = 31_000
@@ -861,7 +861,7 @@ struct AppConfigTests {
         #expect(decoded.postProcessorSystemPrompt == "Preserve labels and quotes.")
         #expect(decoded.enableScreenContext == true)
         #expect(decoded.enableDictationOCRContext == true)
-        #expect(decoded.enableLiveStreamingPartials == false)
+        #expect(decoded.enableLiveStreamingPartials == true)
         #expect(decoded.resolvedMeetingLiveCaptionBackend == .nemotron35)
         #expect(decoded.showMeetingTranscriptOnIndicatorHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
@@ -1010,9 +1010,28 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
-        #expect(config.enableLiveStreamingPartials == true)
+        #expect(config.enableLiveStreamingPartials == false)
         #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
         #expect(config.showMeetingTranscriptOnIndicatorHover == true)
+    }
+
+    @Test("legacy meeting config preserves its transcription model and leaves streaming off")
+    func legacyMeetingConfigPreservesTranscriptionModel() throws {
+        let json = """
+        {
+          "stt_backend": "fluidaudio",
+          "stt_model": "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+          "has_completed_onboarding": true,
+          "onboarding_use_case": "meetings"
+        }
+        """
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.sttModel == BackendOption.parakeetMultilingual.model)
+        #expect(config.meetingTranscriptionBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.meetingTranscriptionModel == BackendOption.parakeetMultilingual.model)
+        #expect(config.enableLiveStreamingPartials == false)
     }
 
     @Test("meeting summary retry count is clamped on decode")
