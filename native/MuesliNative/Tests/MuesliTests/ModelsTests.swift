@@ -556,6 +556,7 @@ struct AppConfigTests {
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
         #expect(config.enableLiveStreamingPartials == true)
+        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -770,6 +771,7 @@ struct AppConfigTests {
         config.enableScreenContext = true
         config.enableDictationOCRContext = true
         config.enableLiveStreamingPartials = false
+        config.showMeetingTranscriptOnIndicatorHover = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -842,6 +844,7 @@ struct AppConfigTests {
         #expect(decoded.enableScreenContext == true)
         #expect(decoded.enableDictationOCRContext == true)
         #expect(decoded.enableLiveStreamingPartials == false)
+        #expect(decoded.showMeetingTranscriptOnIndicatorHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -917,6 +920,8 @@ struct AppConfigTests {
         #expect(json["custom_transcript_cleanup_prompts"] != nil)
         #expect(json["enable_screen_context"] != nil)
         #expect(json["enable_dictation_ocr_context"] != nil)
+        #expect(json["enable_live_streaming_partials"] != nil)
+        #expect(json["show_meeting_transcript_on_indicator_hover"] != nil)
     }
 
     @Test("decodes screen context flags from snake_case")
@@ -987,6 +992,7 @@ struct AppConfigTests {
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
         #expect(config.enableLiveStreamingPartials == true)
+        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
     }
 
     @Test("meeting summary retry count is clamped on decode")

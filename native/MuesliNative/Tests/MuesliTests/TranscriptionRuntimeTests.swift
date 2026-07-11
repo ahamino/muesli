@@ -217,10 +217,23 @@ struct TranscriptionEngineArtifactsFilterTests {
         #expect(TranscriptionEngineArtifactsFilter.apply("") == "")
     }
 
-    @Test("does not strip artifact when it appears mid-sentence")
-    func midSentenceNotStripped() {
+    @Test("strips artifact when it appears mid-sentence")
+    func midSentenceArtifact() {
         let text = "Hello [blank_audio] world"
-        #expect(TranscriptionEngineArtifactsFilter.apply(text) == text)
+        #expect(TranscriptionEngineArtifactsFilter.apply(text) == "Hello world")
+    }
+
+    @Test("strips decorated streaming blank-audio artifact")
+    func decoratedStreamingArtifact() {
+        #expect(TranscriptionEngineArtifactsFilter.apply(">> [BLANK_AUDIO]") == "")
+    }
+
+    @Test("strips model control tokens and non-speech annotations")
+    func controlTokens() {
+        #expect(
+            TranscriptionEngineArtifactsFilter.apply("<EOU> Hello <EOB> [silence]") ==
+                "Hello"
+        )
     }
 
     @Test("strips leaked prompt suffix from transcript")

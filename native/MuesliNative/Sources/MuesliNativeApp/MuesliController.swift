@@ -516,6 +516,7 @@ final class MuesliController: NSObject {
         indicator.onStopMeeting = { [weak self] in self?.stopMeetingRecording() }
         indicator.onDiscardMeeting = { [weak self] in self?.discardMeetingWithConfirmation() }
         indicator.onToggleMeetingPause = { [weak self] in self?.toggleMeetingRecordingPause() }
+        indicator.onOpenMeetingNotes = { [weak self] in self?.openActiveMeetingNotes() }
         indicator.onStopToggleDictation = { [weak self] in
             guard let self else { return }
             if self.hotkeyMonitor.isToggleRecording {
@@ -786,6 +787,7 @@ final class MuesliController: NSObject {
         } else {
             indicator.closeIfIdle()
         }
+        indicator.refreshMeetingTranscriptPreference(config: config)
     }
 
     func refreshUI() {
@@ -1062,6 +1064,7 @@ final class MuesliController: NSObject {
         } else {
             indicator.closeIfIdle()
         }
+        indicator.refreshMeetingTranscriptPreference(config: config)
         appState.selectedBackend = selectedBackend
         appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
@@ -3348,6 +3351,15 @@ final class MuesliController: NSObject {
         showMeetingDocument(id: activeMeetingID)
     }
 
+    func openActiveMeetingNotes() {
+        guard ensureBasicDictationPermissionsBeforeDashboard() else { return }
+        guard let activeMeetingID,
+              isMeetingRecording() || isStartingMeetingRecording else { return }
+        showMeetingDocument(id: activeMeetingID)
+        appState.meetingNotesFocusRequest &+= 1
+        presentHistoryWindow()
+    }
+
     func showMeetingTemplatesManager() {
         appState.selectedTab = .meetings
         appState.isMeetingTemplatesManagerPresented = true
@@ -4882,6 +4894,11 @@ final class MuesliController: NSObject {
                         // by segment timestamps, so the durable fallback stays temporally ordered.
                         let lines = entries.map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
                         self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
+                        self.indicator.updateMeetingTranscript(
+                            transcript: self.appState.liveMeetingTranscript,
+                            partialYou: self.appState.liveMeetingPartialYou,
+                            partialOthers: self.appState.liveMeetingPartialOthers
+                        )
                     }
                 }
                 meetingSession.onPartialTranscript = { [weak self] speaker, tail in
@@ -4889,16 +4906,28 @@ final class MuesliController: NSObject {
                         guard let self else { return }
                         guard self.appState.liveMeetingTranscriptOwnerID == meetingID else { return }
                         if speaker == "You" {
+                            guard self.appState.liveMeetingPartialYou != tail else { return }
                             self.appState.liveMeetingPartialYou = tail
                         } else {
+                            guard self.appState.liveMeetingPartialOthers != tail else { return }
                             self.appState.liveMeetingPartialOthers = tail
                         }
+                        self.indicator.updateMeetingTranscript(
+                            transcript: self.appState.liveMeetingTranscript,
+                            partialYou: self.appState.liveMeetingPartialYou,
+                            partialOthers: self.appState.liveMeetingPartialOthers
+                        )
                     }
                 }
                 appState.liveMeetingTranscriptOwnerID = meetingID
                 appState.liveMeetingTranscript = ""
                 appState.liveMeetingPartialYou = ""
                 appState.liveMeetingPartialOthers = ""
+                indicator.updateMeetingTranscript(
+                    transcript: "",
+                    partialYou: "",
+                    partialOthers: ""
+                )
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
                 meetingSession.onMicHealthChanged = { [weak self] snapshot in

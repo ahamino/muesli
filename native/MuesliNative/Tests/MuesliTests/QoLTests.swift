@@ -52,6 +52,25 @@ struct FloatingIndicatorVisibilityTests {
         #expect(config.showFloatingIndicator == false)
     }
 
+    @Test("meeting transcript hover defaults on and persists")
+    func meetingTranscriptHoverRoundTrip() throws {
+        var config = AppConfig()
+        #expect(config.showMeetingTranscriptOnIndicatorHover)
+        config.showMeetingTranscriptOnIndicatorHover = false
+
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(!decoded.showMeetingTranscriptOnIndicatorHover)
+    }
+
+    @Test("meeting transcript hover decodes from snake_case JSON")
+    func meetingTranscriptHoverSnakeCaseDecode() throws {
+        let json = #"{"show_meeting_transcript_on_indicator_hover": false}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(!config.showMeetingTranscriptOnIndicatorHover)
+    }
+
     @Test("post processor defaults to disabled")
     func postProcessorDisabledByDefault() {
         let config = AppConfig()
@@ -190,6 +209,105 @@ struct IndicatorFrameSizeTests {
         #expect(short.height >= 44)
         #expect(long.width <= 372)
         #expect(long.height > short.height)
+    }
+}
+
+@Suite("Floating meeting transcript")
+struct FloatingMeetingTranscriptTests {
+    @Test("panel prefers the open side and remains inside the screen")
+    func panelPlacement() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let trailingIndicator = NSRect(x: 1350, y: 440, width: 76, height: 22)
+        let leadingIndicator = NSRect(x: 14, y: 440, width: 76, height: 22)
+
+        let leftFrame = FloatingMeetingTranscriptPlacement.frame(
+            beside: trailingIndicator,
+            visibleFrame: screen
+        )
+        let rightFrame = FloatingMeetingTranscriptPlacement.frame(
+            beside: leadingIndicator,
+            visibleFrame: screen
+        )
+
+        #expect(leftFrame.maxX == trailingIndicator.minX)
+        #expect(rightFrame.minX == leadingIndicator.maxX)
+        #expect(screen.insetBy(dx: 8, dy: 8).contains(leftFrame))
+        #expect(screen.insetBy(dx: 8, dy: 8).contains(rightFrame))
+    }
+
+    @Test("panel clamps vertically on short screens")
+    func verticalPlacementClamp() {
+        let screen = NSRect(x: 100, y: 50, width: 900, height: 360)
+        let indicator = NSRect(x: 950, y: 380, width: 40, height: 22)
+
+        let frame = FloatingMeetingTranscriptPlacement.frame(
+            beside: indicator,
+            visibleFrame: screen
+        )
+
+        #expect(frame.minY >= screen.minY + 8)
+        #expect(frame.maxY == screen.maxY - 8)
+    }
+
+    @Test("copy includes committed transcript and current partials")
+    func copyTextIncludesLiveTails() {
+        let text = LiveTranscriptCopyContent.text(
+            transcript: "[10:00:00] You: committed",
+            partialYou: "speaking now",
+            partialOthers: "current reply"
+        )
+
+        #expect(text == "[10:00:00] You: committed\nOthers: current reply\nYou: speaking now")
+    }
+
+    @Test("panel keeps only the most recent committed messages")
+    func recentTranscriptBound() {
+        let transcript = (0..<12)
+            .map { "[10:00:\(String(format: "%02d", $0))] You: line \($0)" }
+            .joined(separator: "\n")
+
+        let messages = FloatingMeetingTranscriptContent.recentMessages(from: transcript)
+
+        #expect(messages.count == FloatingMeetingTranscriptContent.maximumCommittedMessages)
+        #expect(messages.first?.text == "line 4")
+        #expect(messages.last?.text == "line 11")
+    }
+}
+
+@Suite("Floating indicator pointer interaction")
+struct FloatingIndicatorPointerInteractionTests {
+    @Test("small pointer movement remains a click while deliberate movement drags")
+    func dragThreshold() {
+        let start = NSPoint(x: 100, y: 100)
+        #expect(!FloatingIndicatorPointerIntent.isDrag(
+            from: start,
+            to: NSPoint(x: 102, y: 102)
+        ))
+        #expect(FloatingIndicatorPointerIntent.isDrag(
+            from: start,
+            to: NSPoint(x: 104, y: 100)
+        ))
+    }
+
+    @MainActor
+    @Test("single-click retains its existing meeting command")
+    func singleClickStillRuns() {
+        let indicator = makeIndicator()
+        var stopCount = 0
+        indicator.onStopMeeting = { stopCount += 1 }
+        indicator.setMeetingRecording(true, config: AppConfig())
+
+        indicator.handleClick(atX: 50)
+
+        #expect(stopCount == 1)
+        indicator.close()
+    }
+
+    @MainActor
+    private func makeIndicator() -> FloatingIndicatorController {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return FloatingIndicatorController(configStore: ConfigStore(supportDirectory: supportDirectory))
     }
 }
 

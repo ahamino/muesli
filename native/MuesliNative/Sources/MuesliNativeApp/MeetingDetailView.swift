@@ -122,6 +122,9 @@ struct MeetingDetailView: View {
                 .onChange(of: meeting.status) { _, _ in
                     syncLocalState(with: meeting)
                 }
+                .onChange(of: appState.meetingNotesFocusRequest) { _, _ in
+                    recordingMode = .notes
+                }
                 .onChange(of: meeting.manualNotes) { _, _ in
                     syncManualNotesState(with: meeting)
                 }

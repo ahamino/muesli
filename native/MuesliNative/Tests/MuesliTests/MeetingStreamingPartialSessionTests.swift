@@ -40,6 +40,35 @@ struct MeetingStreamingPartialSessionTests {
         #expect(engine.processCalls == 2)
     }
 
+    @Test("coalesces rapid partials and suppresses duplicate UI updates")
+    func coalescesAndDeduplicatesPartials() async throws {
+        let engine = ScriptedPartialEngine(script: ["one", "one", "one two"])
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 3))
+
+        #expect(await waitUntil { collector.latest == "one two" })
+        #expect(collector.all == ["one two"])
+        #expect(engine.processCalls == 3)
+    }
+
+    @Test("filters engine control tags before publishing live captions")
+    func filtersEngineArtifacts() async throws {
+        let engine = ScriptedPartialEngine(script: [">> [BLANK_AUDIO]"])
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 1))
+
+        #expect(await waitUntil { collector.latest == "" })
+        #expect(!collector.all.contains { $0.localizedCaseInsensitiveContains("blank_audio") })
+    }
+
     @Test("buffers sub-chunk sample batches until a feed interval is available")
     func buffersSubChunkBatches() async throws {
         let engine = ScriptedPartialEngine(script: ["hello"])
@@ -188,7 +217,7 @@ struct MeetingStreamingPartialSessionTests {
         }
         session.enqueue(input)
 
-        #expect(await waitUntil { collector.latest == " c4 c5 c6" })
+        #expect(await waitUntil { collector.latest == "c4 c5 c6" })
         #expect(engine.processCalls == MeetingStreamingPartialSession.maxQueuedChunks)
     }
 }

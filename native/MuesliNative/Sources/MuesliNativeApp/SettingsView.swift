@@ -1147,6 +1147,13 @@ struct SettingsView: View {
             }
 
             settingsSection("Recording") {
+                settingsRow("Live transcript on waveform hover") {
+                    settingsSwitch(isOn: appState.config.showMeetingTranscriptOnIndicatorHover) { newValue in
+                        controller.updateConfig { $0.showMeetingTranscriptOnIndicatorHover = newValue }
+                    }
+                }
+                settingsDescription("Show recent live captions beside the floating meeting waveform.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Auto-record calendar meetings") {
                     settingsSwitch(isOn: appState.config.autoRecordMeetings) { newValue in
                         controller.updateConfig { $0.autoRecordMeetings = newValue }

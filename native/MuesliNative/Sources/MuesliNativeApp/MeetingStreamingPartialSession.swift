@@ -119,6 +119,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     /// larger look-ahead window required by its cache-aware encoder.
     static let feedSamples = StreamingChunkSize.ms320.shiftSamples
     static let maxQueuedChunks = 3
+    static let publicationIntervalNanoseconds: UInt64 = 250_000_000
 
     private let engine: MeetingStreamingPartialEngine
     private let label: String
@@ -133,6 +134,9 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         var isStopped = false
         var isSuspended = false
         var didFail = false
+        var pendingPublicationTail: String?
+        var lastPublishedTail: String?
+        var isPublicationScheduled = false
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -190,7 +194,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             return visibleTail(for: s)
         }
         if let tail {
-            onPartialUpdate?(tail)
+            publishImmediately(tail)
         }
     }
 
@@ -204,7 +208,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.chunkQueue.removeAll(keepingCapacity: true)
             s.committedPrefixLength = s.engineText.count
         }
-        onPartialUpdate?("")
+        publishImmediately("")
     }
 
     func resume() {
@@ -221,6 +225,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.engineText = ""
             s.committedPrefixLength = 0
             s.pendingCommitPrefixLengths.removeAll()
+            s.pendingPublicationTail = nil
         }
         Task { await engine.shutdown() }
     }
@@ -246,17 +251,18 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     }
 
     private func receiveEnginePartial(_ text: String) {
+        let filteredText = TranscriptionEngineArtifactsFilter.apply(text)
         let tail: String? = state.withLock { s in
             guard !s.isStopped, !s.isSuspended, !s.didFail else { return nil }
-            if text.count < s.committedPrefixLength {
+            if filteredText.count < s.committedPrefixLength {
                 s.committedPrefixLength = 0
                 s.pendingCommitPrefixLengths.removeAll()
             }
-            s.engineText = text
+            s.engineText = filteredText
             return visibleTail(for: s)
         }
         if let tail {
-            onPartialUpdate?(tail)
+            schedulePublication(tail)
         }
     }
 
@@ -271,8 +277,58 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
             s.pendingCommitPrefixLengths.removeAll()
         }
         fputs("[meeting-partials] \(label) session dormant after error: \(error)\n", stderr)
-        onPartialUpdate?("")
+        publishImmediately("")
         Task { await engine.shutdown() }
+    }
+
+    /// Core ML may produce partials faster than SwiftUI can lay out a long live
+    /// transcript. Keep one delayed publication per source and replace its
+    /// payload with the newest tail instead of queueing main-actor work.
+    private func schedulePublication(_ tail: String) {
+        let shouldSchedule = state.withLock { s -> Bool in
+            guard !s.isStopped, !s.isSuspended, !s.didFail else { return false }
+            guard tail != s.lastPublishedTail || s.pendingPublicationTail != nil else { return false }
+            s.pendingPublicationTail = tail
+            guard !s.isPublicationScheduled else { return false }
+            s.isPublicationScheduled = true
+            return true
+        }
+        guard shouldSchedule else { return }
+
+        Task.detached(priority: .utility) { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.publicationIntervalNanoseconds)
+            self?.flushScheduledPublication()
+        }
+    }
+
+    private func flushScheduledPublication() {
+        let tail: String? = state.withLock { s in
+            s.isPublicationScheduled = false
+            guard !s.isStopped, !s.isSuspended, !s.didFail,
+                  let pending = s.pendingPublicationTail else {
+                s.pendingPublicationTail = nil
+                return nil
+            }
+            s.pendingPublicationTail = nil
+            guard pending != s.lastPublishedTail else { return nil }
+            s.lastPublishedTail = pending
+            return pending
+        }
+        if let tail {
+            onPartialUpdate?(tail)
+        }
+    }
+
+    private func publishImmediately(_ tail: String) {
+        let shouldPublish = state.withLock { s -> Bool in
+            s.pendingPublicationTail = nil
+            guard tail != s.lastPublishedTail else { return false }
+            s.lastPublishedTail = tail
+            return true
+        }
+        if shouldPublish {
+            onPartialUpdate?(tail)
+        }
     }
 
     private func visibleTail(for state: State) -> String {
