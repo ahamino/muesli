@@ -269,6 +269,31 @@ struct FloatingMeetingTranscriptTests {
         #expect(receivedMouseDown == NSPoint(x: 20, y: 20))
     }
 
+    @Test("shown overlay retains its hosting view and routes dismissal")
+    @MainActor
+    func shownOverlayRoutesDismissal() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: panel.contentView?.bounds ?? .zero)
+        panel.contentView = container
+        var dismissCount = 0
+        let controller = FloatingMeetingTranscriptPanelController(
+            onHoverChanged: { _ in },
+            onOpenNotes: {},
+            onDismiss: { dismissCount += 1 }
+        )
+
+        controller.show(in: container, frame: container.bounds)
+
+        #expect(controller.isVisible)
+        #expect(controller.handleClick(atWindowPoint: NSPoint(x: 290, y: 300)))
+        #expect(dismissCount == 1)
+    }
+
     @Test("panel prefers the open side and remains inside the screen")
     func panelPlacement() {
         let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)

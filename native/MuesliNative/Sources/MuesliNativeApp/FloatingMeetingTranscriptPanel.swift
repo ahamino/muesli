@@ -115,6 +115,7 @@ final class FloatingMeetingTranscriptPanelController {
 
     func show(in containerView: NSView, frame: NSRect) {
         let hostingView = hostingView ?? makeHostingView()
+        self.hostingView = hostingView
         if hostingView.superview !== containerView {
             hostingView.removeFromSuperview()
             containerView.addSubview(hostingView)
@@ -153,11 +154,18 @@ final class FloatingMeetingTranscriptPanelController {
 
     @discardableResult
     func handleClick(atWindowPoint windowPoint: NSPoint) -> Bool {
-        guard isVisible, let hostingView,
-              let interaction = FloatingMeetingTranscriptInteraction.action(
-                at: hostingView.convert(windowPoint, from: nil),
-                in: hostingView.bounds
-              ) else { return false }
+        guard isVisible, let hostingView else { return false }
+        let localPoint = hostingView.convert(windowPoint, from: nil)
+        let interactionPoint = hostingView.isFlipped
+            ? NSPoint(
+                x: localPoint.x,
+                y: hostingView.bounds.maxY - (localPoint.y - hostingView.bounds.minY)
+            )
+            : localPoint
+        guard let interaction = FloatingMeetingTranscriptInteraction.action(
+            at: interactionPoint,
+            in: hostingView.bounds
+        ) else { return false }
 
         switch interaction {
         case .dismiss:
