@@ -16,7 +16,7 @@ There are three pieces:
 - **`publish_state_json`** — a generic per-record column that stores where each record was
   exported, keyed by target. Adding a target needs **no schema change**.
 
-```
+```text
 DictationStore ──dirty records──▶ ExportCoordinator ──per record──▶ YourTarget ──▶ service
        ▲                                    │
        └──────── publish_state_json ◀───────┘   (remote id + exported-at, keyed by target)
@@ -99,7 +99,12 @@ final class FolderTarget: ExportTarget {
     func isAuthError(_ error: Error) -> Bool { false }  // a local folder never "de-auths"
 
     func unpublish(remoteID: String) async throws {     // optional: propagate deletes
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent(remoteID))
+        do {
+            try FileManager.default.removeItem(at: directory.appendingPathComponent(remoteID))
+        } catch CocoaError.fileNoSuchFile {
+            // Already gone — treat as success (delete is idempotent).
+        }
+        // Any other error (permissions, I/O) propagates so the coordinator can retry.
     }
 }
 ```
