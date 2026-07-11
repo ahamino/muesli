@@ -272,6 +272,26 @@ struct FloatingMeetingTranscriptTests {
         #expect(messages.first?.text == "line 0")
         #expect(messages.last?.text == "line 11")
     }
+
+    @Test("incremental panel updates retain unique message identities")
+    @MainActor
+    func incrementalUpdatesUseUniqueIDs() {
+        let model = FloatingMeetingTranscriptModel()
+
+        model.update(
+            transcript: "[10:00:00] You: first\n",
+            partialYou: "",
+            partialOthers: ""
+        )
+        model.update(
+            transcript: "[10:00:00] You: first\n[10:00:05] Others: second\n",
+            partialYou: "",
+            partialOthers: ""
+        )
+
+        #expect(model.committedMessages.map(\.id) == [0, 1])
+        #expect(model.committedMessages.map(\.text) == ["first", "second"])
+    }
 }
 
 @Suite("Floating indicator pointer interaction")

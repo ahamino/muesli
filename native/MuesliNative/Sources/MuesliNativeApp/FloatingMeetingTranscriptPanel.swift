@@ -32,8 +32,8 @@ enum FloatingMeetingTranscriptPlacement {
 }
 
 enum FloatingMeetingTranscriptContent {
-    static func messages(from transcript: String) -> [TranscriptChatMessage] {
-        TranscriptChatMessage.messages(from: transcript)
+    static func messages(from transcript: String, startingAt firstID: Int = 0) -> [TranscriptChatMessage] {
+        TranscriptChatMessage.messages(from: transcript, startingAt: firstID)
     }
 
 }
@@ -56,7 +56,10 @@ final class FloatingMeetingTranscriptModel {
         if transcript != self.transcript {
             if transcript.hasPrefix(self.transcript) {
                 let appended = String(transcript.dropFirst(self.transcript.count))
-                committedMessages.append(contentsOf: FloatingMeetingTranscriptContent.messages(from: appended))
+                committedMessages.append(contentsOf: FloatingMeetingTranscriptContent.messages(
+                    from: appended,
+                    startingAt: committedMessages.count
+                ))
             } else {
                 committedMessages = FloatingMeetingTranscriptContent.messages(from: transcript)
             }
@@ -78,13 +81,19 @@ final class FloatingMeetingTranscriptModel {
     }
 }
 
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
 @MainActor
 final class FloatingMeetingTranscriptPanelController {
     private let model = FloatingMeetingTranscriptModel()
     private let onHoverChanged: (Bool) -> Void
     private let onOpenNotes: () -> Void
     private let onDismiss: () -> Void
-    private var hostingView: NSHostingView<FloatingMeetingTranscriptPanelView>?
+    private var hostingView: FirstMouseHostingView<FloatingMeetingTranscriptPanelView>?
 
     init(
         onHoverChanged: @escaping (Bool) -> Void,
@@ -146,8 +155,8 @@ final class FloatingMeetingTranscriptPanelController {
         return hostingView.frame.contains(locationInWindow)
     }
 
-    private func makeHostingView() -> NSHostingView<FloatingMeetingTranscriptPanelView> {
-        let hostingView = NSHostingView(
+    private func makeHostingView() -> FirstMouseHostingView<FloatingMeetingTranscriptPanelView> {
+        let hostingView = FirstMouseHostingView(
             rootView: FloatingMeetingTranscriptPanelView(
                 model: model,
                 onHoverChanged: onHoverChanged,

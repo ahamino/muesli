@@ -1211,7 +1211,7 @@ final class FloatingIndicatorController: NSObject {
     private func createPanel(config: AppConfig) {
         let panel = NSPanel(
             contentRect: frameForState(.idle, config: config),
-            styleMask: .borderless,
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -1222,6 +1222,7 @@ final class FloatingIndicatorController: NSObject {
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = false
         panel.isMovableByWindowBackground = false
+        panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
         let containerView = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))

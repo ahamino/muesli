@@ -1763,7 +1763,7 @@ struct TranscriptChatMessage: Identifiable, Equatable {
         speaker?.localizedCaseInsensitiveCompare("You") == .orderedSame
     }
 
-    static func messages(from transcript: String) -> [TranscriptChatMessage] {
+    static func messages(from transcript: String, startingAt firstID: Int = 0) -> [TranscriptChatMessage] {
         let normalized = transcript.replacingOccurrences(of: "\r\n", with: "\n")
         let rawLines = normalized
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -1773,7 +1773,7 @@ struct TranscriptChatMessage: Identifiable, Equatable {
         for rawLine in rawLines {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
-            let parsed = parseLine(line, id: messages.count)
+            let parsed = parseLine(line, id: firstID + messages.count)
             messages.append(parsed)
         }
 
