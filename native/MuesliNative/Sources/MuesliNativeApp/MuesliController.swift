@@ -394,7 +394,17 @@ final class MuesliController: NSObject {
         dictationAudioRoutingController: DictationAudioRouting = DictationAudioRouteController()
     ) {
         self.configStore = configStore
-        let loadedConfig = configStore.load()
+        var loadedConfig = configStore.load()
+        let loadedBackend = BackendOption.all.first(where: {
+            $0.backend == loadedConfig.sttBackend && $0.model == loadedConfig.sttModel
+        }) ?? .whisper
+        var loadedPostProcessorBackend = TranscriptCleanupBackendOption.resolved(loadedConfig.postProcessorBackend)
+        if !loadedPostProcessorBackend.isCompatible(with: loadedBackend) {
+            loadedPostProcessorBackend = .local
+            loadedConfig.postProcessorBackend = loadedPostProcessorBackend.backend
+            loadedConfig.enablePostProcessor = false
+            configStore.save(loadedConfig)
+        }
         self.runtime = runtime
         self.dictationStore = dictationStore ?? DictationStore(
             databaseURL: MuesliPaths.defaultDatabaseURL(appName: AppIdentity.supportDirectoryName)
@@ -414,9 +424,7 @@ final class MuesliController: NSObject {
         if loadedConfig.recordingColorHex != "1e1e2e" {
             MuesliTheme.accentOverrideHex = loadedConfig.recordingColorHex
         }
-        self.selectedBackend = BackendOption.all.first(where: {
-            $0.backend == loadedConfig.sttBackend && $0.model == loadedConfig.sttModel
-        }) ?? .whisper
+        self.selectedBackend = loadedBackend
         let configuredMeetingBackend = BackendOption.resolve(
             backend: loadedConfig.meetingTranscriptionBackend,
             model: loadedConfig.meetingTranscriptionModel
@@ -432,7 +440,7 @@ final class MuesliController: NSObject {
         self.selectedMeetingSummaryBackend = MeetingSummaryBackendOption.all.first(where: {
             $0.backend == loadedConfig.meetingSummaryBackend
         }) ?? .chatGPT
-        self.selectedPostProcessorBackend = TranscriptCleanupBackendOption.resolved(loadedConfig.postProcessorBackend)
+        self.selectedPostProcessorBackend = loadedPostProcessorBackend
         self.indicator = FloatingIndicatorController(configStore: configStore)
         ComputerUseCursorOverlay.shared.attachIndicator(self.indicator)
         super.init()
@@ -1031,6 +1039,11 @@ final class MuesliController: NSObject {
         selectedBackend = BackendOption.all.first(where: {
             $0.backend == config.sttBackend && $0.model == config.sttModel
         }) ?? .whisper
+        let configuredPostProcessorBackend = TranscriptCleanupBackendOption.resolved(config.postProcessorBackend)
+        if !configuredPostProcessorBackend.isCompatible(with: selectedBackend) {
+            config.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
+            config.enablePostProcessor = false
+        }
         let configuredMeetingTranscriptionBackend = BackendOption.all.first(where: {
             $0.backend == config.meetingTranscriptionBackend && $0.model == config.meetingTranscriptionModel
         })
@@ -1926,9 +1939,17 @@ final class MuesliController: NSObject {
     }
 
     func selectBackend(_ option: BackendOption) {
+        let replacesGemmaCleanup = !selectedPostProcessorBackend.isCompatible(with: option)
+        let hasLocalCleanupModel = PostProcessorOption.runtimeOption(id: config.activePostProcessorId) != nil
         updateConfig {
             $0.sttBackend = option.backend
             $0.sttModel = option.model
+            if replacesGemmaCleanup {
+                $0.postProcessorBackend = TranscriptCleanupBackendOption.local.backend
+                if !hasLocalCleanupModel {
+                    $0.enablePostProcessor = false
+                }
+            }
         }
         Task { [weak self] in
             guard let self else { return }
@@ -2049,9 +2070,13 @@ final class MuesliController: NSObject {
     }
 
     private func canRunTranscriptCleanup(option: PostProcessorOption?) -> Bool {
-        guard config.enablePostProcessor else { return false }
+        guard config.enablePostProcessor,
+              selectedPostProcessorBackend.isCompatible(with: selectedBackend) else { return false }
         if selectedPostProcessorBackend == .local {
             return option != nil
+        }
+        if selectedPostProcessorBackend == .gemma4LiteRT {
+            return Gemma4LiteRTModelStore.isAvailableLocally()
         }
         return TranscriptCleanupClient.hasRequiredSettings(
             for: selectedPostProcessorBackend,
@@ -2070,12 +2095,22 @@ final class MuesliController: NSObject {
     }
 
     func setPostProcessorEnabled(_ enabled: Bool) {
+        guard !enabled || selectedPostProcessorBackend.isCompatible(with: selectedBackend) else {
+            updateConfig { $0.enablePostProcessor = false }
+            return
+        }
         if enabled, selectedPostProcessorBackend == .local {
             guard normalizePostProcessorSelectionForAvailability() != nil else {
                 updateConfig { $0.enablePostProcessor = false }
                 appState.selectedTab = .models
                 return
             }
+        }
+        if enabled, selectedPostProcessorBackend == .gemma4LiteRT,
+           !Gemma4LiteRTModelStore.isAvailableLocally() {
+            updateConfig { $0.enablePostProcessor = false }
+            appState.selectedTab = .models
+            return
         }
         updateConfig { $0.enablePostProcessor = enabled }
         preloadExperimentalTranscriptionFeatures()
@@ -2087,7 +2122,10 @@ final class MuesliController: NSObject {
         Task { [weak self] in
             guard let self else { return }
             await self.configureTranscriptCleanupForRuntime(option: ppOption)
-            await self.transcriptionCoordinator.preloadPostProcessorIfNeeded(enabled: enabled)
+            await self.transcriptionCoordinator.preloadPostProcessorIfNeeded(
+                enabled: enabled,
+                transcriptionBackend: self.selectedBackend
+            )
         }
     }
 
@@ -2107,6 +2145,13 @@ final class MuesliController: NSObject {
     }
 
     func selectPostProcessorBackend(_ option: TranscriptCleanupBackendOption) {
+        guard option.isCompatible(with: selectedBackend) else {
+            presentErrorAlert(
+                title: "Cleanup model unavailable",
+                message: "Gemma 4 cannot clean up a transcription produced by the same Gemma 4 backend."
+            )
+            return
+        }
         updateConfig { $0.postProcessorBackend = option.backend }
         selectedPostProcessorBackend = option
         appState.selectedPostProcessorBackend = option
@@ -2116,6 +2161,12 @@ final class MuesliController: NSObject {
                 appState.selectedTab = .models
                 return
             }
+        }
+        if option == .gemma4LiteRT, config.enablePostProcessor,
+           !Gemma4LiteRTModelStore.isAvailableLocally() {
+            updateConfig { $0.enablePostProcessor = false }
+            appState.selectedTab = .models
+            return
         }
         preloadExperimentalTranscriptionFeatures()
     }
@@ -4518,7 +4569,10 @@ final class MuesliController: NSObject {
         openDocument: Bool = false,
         endDate: Date? = nil,
         autoStopSource: MeetingAutoStopSource? = nil,
-        startOrigin: MeetingRecordingStartOrigin = .manual
+        startOrigin: MeetingRecordingStartOrigin = .manual,
+        followUpToID: Int64? = nil,
+        inheritedFolderID: Int64? = nil,
+        previousMeetingNotes: String? = nil
     ) -> Bool {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
         guard let meetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
@@ -4538,7 +4592,9 @@ final class MuesliController: NSObject {
                 selectedTemplateID: templateSnapshot.id,
                 selectedTemplateName: templateSnapshot.name,
                 selectedTemplateKind: templateSnapshot.kind,
-                selectedTemplatePrompt: templateSnapshot.prompt
+                selectedTemplatePrompt: templateSnapshot.prompt,
+                folderID: inheritedFolderID,
+                followUpToID: followUpToID
             )
             activeMeetingID = meetingID
             activeMeetingAudioWarning = nil
@@ -4550,7 +4606,7 @@ final class MuesliController: NSObject {
             fputs("[muesli-native] failed to create live meeting: \(error)\n", stderr)
             recordDiagnosticIncident(
                 kind: .meetingStartFailed,
-                stage: "create_live_meeting",
+                stage: .createLiveMeeting,
                 backend: meetingBackend,
                 error: error
             )
@@ -4587,7 +4643,8 @@ final class MuesliController: NSObject {
                     meetingID: meetingID,
                     backend: meetingBackend,
                     templateSnapshot: templateSnapshot,
-                    endDate: endDate
+                    endDate: endDate,
+                    previousMeetingNotes: previousMeetingNotes
                 )
             } catch is CancellationError {
                 if self.meetingStartMeetingID == meetingID {
@@ -4607,7 +4664,7 @@ final class MuesliController: NSObject {
                     fputs("[muesli-native] failed to start meeting: \(error)\n", stderr)
                     _ = self.recordDiagnosticIncident(
                         kind: .meetingStartFailed,
-                        stage: "start_meeting_recording",
+                        stage: .startMeetingRecording,
                         backend: meetingBackend,
                         error: error
                     )
@@ -4639,6 +4696,46 @@ final class MuesliController: NSObject {
         MeetingResumePolicy.canResume(status: meeting.status)
     }
 
+    /// Whether `meeting` can spawn a follow-up meeting right now (also gates the UI control).
+    func canStartFollowUpMeeting(_ meeting: MeetingRecord) -> Bool {
+        MeetingFollowUpPolicy.canStartFollowUp(status: meeting.status)
+    }
+
+    /// Starts a *new* meeting linked into `meetingID`'s thread (vs. resume, which
+    /// reopens the same row). Follow-ups attach to the selected meeting, so a
+    /// meeting can have more than one follow-up. The new meeting inherits the
+    /// predecessor's folder and carries its notes into the summary prompt so
+    /// open action items follow the thread.
+    func startFollowUpMeeting(fromMeetingID meetingID: Int64) {
+        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        guard let predecessor = meeting(id: meetingID),
+              canStartFollowUpMeeting(predecessor) else { return }
+        startMeetingRecording(
+            title: MeetingFollowUpPolicy.followUpTitle(from: predecessor.title),
+            openDocument: true,
+            followUpToID: predecessor.id,
+            inheritedFolderID: predecessor.folderID,
+            previousMeetingNotes: MeetingFollowUpPolicy.carriedContext(from: predecessor)
+        )
+    }
+
+    /// Thread parent, direct child follow-ups, and total size for the
+    /// detail-view breadcrumb/list.
+    /// Returns nil for meetings that are not part of a follow-up thread.
+    func meetingThreadContext(for meetingID: Int64) -> MeetingThreadContext? {
+        do {
+            guard let navigation = try dictationStore.meetingThreadNavigation(containing: meetingID) else { return nil }
+            return MeetingThreadContext(
+                predecessor: navigation.predecessorID.flatMap { meeting(id: $0) },
+                successors: navigation.successorIDs.compactMap { meeting(id: $0) },
+                count: navigation.count
+            )
+        } catch {
+            fputs("[muesli-native] failed to resolve meeting thread for \(meetingID): \(error)\n", stderr)
+            return nil
+        }
+    }
+
     /// Reopens a finished meeting and appends more recording onto the *same* row
     /// (vs. `startMeetingRecording`, which creates a new row). Mirrors the start
     /// scaffolding but skips `createLiveMeeting` and reuses the existing meeting id.
@@ -4663,6 +4760,9 @@ final class MuesliController: NSObject {
             return
         }
         pendingResumePriorTranscript[meetingID] = priorTranscript
+        let previousMeetingNotes = meeting.followUpToID
+            .flatMap { self.meeting(id: $0) }
+            .flatMap { MeetingFollowUpPolicy.carriedContext(from: $0) }
 
         // REUSE the existing row — do NOT call createLiveMeeting.
         activeMeetingID = meetingID
@@ -4697,7 +4797,8 @@ final class MuesliController: NSObject {
                     meetingID: meetingID,
                     backend: meetingBackend,
                     templateSnapshot: self.meetingTemplateSnapshot(for: meeting),
-                    endDate: nil
+                    endDate: nil,
+                    previousMeetingNotes: previousMeetingNotes
                 )
             } catch is CancellationError {
                 if self.meetingStartMeetingID == meetingID {
@@ -4963,7 +5064,8 @@ final class MuesliController: NSObject {
         meetingID: Int64,
         backend: BackendOption,
         templateSnapshot: MeetingTemplateSnapshot,
-        endDate: Date?
+        endDate: Date?,
+        previousMeetingNotes: String? = nil
     ) async throws {
         var shouldRetryAfterPermissionRequest = config.useCoreAudioTap
         statusBarController?.setStatus("Meeting transcription will start shortly.")
@@ -4995,6 +5097,7 @@ final class MuesliController: NSObject {
                 transcriptionCoordinator: transcriptionCoordinator,
                 meetingMicRecorder: meetingMicRecorder
             )
+            meetingSession.previousMeetingNotes = previousMeetingNotes
 
             do {
                 meetingSession.manualNotesProvider = { [weak self] in
@@ -5502,7 +5605,7 @@ final class MuesliController: NSObject {
     private func recordDiagnosticIncident(
         kind: DiagnosticIncidentKind,
         severity: DiagnosticIncidentSeverity = .error,
-        stage: String,
+        stage: DiagnosticIncidentStage,
         backend: BackendOption? = nil,
         error: Error? = nil,
         promptUser: Bool = true
@@ -5615,7 +5718,7 @@ final class MuesliController: NSObject {
                     await MainActor.run {
                         self.recordDiagnosticIncident(
                             kind: .meetingRecordingSaveFailed,
-                            stage: "save_meeting_recording",
+                            stage: .saveMeetingRecording,
                             backend: self.selectedMeetingTranscriptionBackend,
                             error: recordingSaveError
                         )
@@ -5627,7 +5730,7 @@ final class MuesliController: NSObject {
                 await MainActor.run {
                     _ = self.recordDiagnosticIncident(
                         kind: .meetingProcessingFailed,
-                        stage: "meeting_stop_processing",
+                        stage: .meetingStopProcessing,
                         backend: self.selectedMeetingTranscriptionBackend,
                         error: error
                     )
@@ -7180,7 +7283,7 @@ final class MuesliController: NSObject {
             if !isDictationTestMode {
                 recordDiagnosticIncident(
                     kind: .dictationAudioFailed,
-                    stage: "dictation_audio_session",
+                    stage: .dictationAudioSession,
                     backend: selectedBackend,
                     error: error
                 )
@@ -7408,7 +7511,7 @@ final class MuesliController: NSObject {
         if !isDictationTestMode {
             recordDiagnosticIncident(
                 kind: .streamingDictationStartFailed,
-                stage: "nemotron_streaming_start",
+                stage: .nemotronStreamingStart,
                 backend: selectedBackend,
                 error: nil
             )
@@ -7436,7 +7539,7 @@ final class MuesliController: NSObject {
         if !isDictationTestMode {
             recordDiagnosticIncident(
                 kind: .streamingDictationRuntimeFailed,
-                stage: "nemotron_streaming_runtime",
+                stage: .nemotronStreamingRuntime,
                 backend: selectedBackend,
                 error: error
             )
@@ -7812,7 +7915,7 @@ final class MuesliController: NSObject {
                     } else {
                         self.recordDiagnosticIncident(
                             kind: .dictationTranscriptionFailed,
-                            stage: "standard_dictation_transcribe",
+                            stage: .standardDictationTranscribe,
                             backend: transcriptionBackend,
                             error: error
                         )

@@ -112,6 +112,7 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
     public var wordCount: Int
     public var isDeleted: Bool
     public var cloudChangeTag: String?
+    public var followUpToRecordName: String?
 
     public init(
         id: String,
@@ -133,7 +134,8 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         durationSeconds: Double,
         wordCount: Int,
         isDeleted: Bool = false,
-        cloudChangeTag: String? = nil
+        cloudChangeTag: String? = nil,
+        followUpToRecordName: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -155,6 +157,7 @@ public struct SyncTextRecord: Identifiable, Codable, Sendable, Equatable {
         self.wordCount = wordCount
         self.isDeleted = isDeleted
         self.cloudChangeTag = cloudChangeTag
+        self.followUpToRecordName = followUpToRecordName
     }
 
     /// Returns a copy with `publishStateJSON` set (keeps all other fields).
@@ -350,6 +353,12 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     public let selectedTemplateKind: MeetingTemplateKind?
     public let selectedTemplatePrompt: String?
     public let source: MeetingSource
+    /// Self-referencing link: the meeting this one is a follow-up to. A meeting
+    /// can have multiple follow-ups; root meetings have nil.
+    public let followUpToID: Int64?
+    /// Stable sync identity for the predecessor. Local row ids differ across
+    /// devices, so sync uses the predecessor's cloud record name.
+    public let followUpToRecordName: String?
 
     public init(
         id: Int64,
@@ -370,7 +379,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         selectedTemplateName: String? = nil,
         selectedTemplateKind: MeetingTemplateKind? = nil,
         selectedTemplatePrompt: String? = nil,
-        source: MeetingSource = .meeting
+        source: MeetingSource = .meeting,
+        followUpToID: Int64? = nil,
+        followUpToRecordName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -391,6 +402,8 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         self.selectedTemplateKind = selectedTemplateKind
         self.selectedTemplatePrompt = selectedTemplatePrompt
         self.source = source
+        self.followUpToID = followUpToID
+        self.followUpToRecordName = followUpToRecordName
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -413,6 +426,8 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
         case selectedTemplateKind
         case selectedTemplatePrompt
         case source
+        case followUpToID
+        case followUpToRecordName
     }
 
     public init(from decoder: Decoder) throws {
@@ -436,7 +451,9 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
             selectedTemplateName: try c.decodeIfPresent(String.self, forKey: .selectedTemplateName),
             selectedTemplateKind: try c.decodeIfPresent(MeetingTemplateKind.self, forKey: .selectedTemplateKind),
             selectedTemplatePrompt: try c.decodeIfPresent(String.self, forKey: .selectedTemplatePrompt),
-            source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting
+            source: (try? c.decode(MeetingSource.self, forKey: .source)) ?? .meeting,
+            followUpToID: try c.decodeIfPresent(Int64.self, forKey: .followUpToID),
+            followUpToRecordName: try c.decodeIfPresent(String.self, forKey: .followUpToRecordName)
         )
     }
 
