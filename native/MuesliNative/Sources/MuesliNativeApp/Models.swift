@@ -124,8 +124,15 @@ struct BackendOption: Equatable {
         .senseVoiceSmall, .qwen3Asr, .indicASR,
     ]
 
+    /// Native streaming backends used by low-latency product surfaces.
+    /// Meeting-only helpers such as Parakeet Realtime EOU are managed by their
+    /// dedicated model store and displayed alongside these options in Models.
+    static let streaming: [BackendOption] = [
+        .nemotron35Multilingual,
+    ]
+
     /// Models available for download and use.
-    static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe, .nemotron35Multilingual] + experimental
+    static let all: [BackendOption] = parakeetFamily + whisperFamily + [.cohereTranscribe] + streaming + experimental
 
     /// Curated first-run choices shown in onboarding's "Other models" section.
     /// This is a deliberate hand-picked list, not a derived rule. Experimental models
@@ -150,7 +157,7 @@ struct BackendOption: Equatable {
     }
 
     var isStreamingDictationBackend: Bool {
-        backend == "nemotron35"
+        Self.streaming.contains(self)
     }
 
     var supportsMeetingTranscription: Bool {

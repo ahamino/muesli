@@ -51,6 +51,7 @@ struct BackendOptionTests {
         #expect(!BackendOption.nemotron35Multilingual.label.contains("Experimental"))
         #expect(!BackendOption.nemotron35Multilingual.recommended)
         #expect(!BackendOption.experimental.contains(.nemotron35Multilingual))
+        #expect(BackendOption.streaming == [.nemotron35Multilingual])
         #expect(BackendOption.all.contains(.nemotron35Multilingual))
     }
 

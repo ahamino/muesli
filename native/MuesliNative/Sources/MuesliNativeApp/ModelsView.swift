@@ -44,7 +44,7 @@ struct ModelsView: View {
                     .font(MuesliTheme.title1())
                     .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Download and manage transcription models. The active model is used for dictation.")
+                Text("Download and manage models for dictation, live captions, and meeting transcription.")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textSecondary)
 
@@ -68,9 +68,7 @@ struct ModelsView: View {
 
                 modelCard(option: .cohereTranscribe, logo: "cohere-logo")
 
-                modelCard(option: .nemotron35Multilingual, logo: "nvidia-logo")
-
-                liveCaptionModelCard
+                streamingSection
 
                 experimentalSection
 
@@ -153,6 +151,31 @@ struct ModelsView: View {
             }
         } message: {
             Text("Live meetings will fall back to committed VAD-chunk captions until this model is downloaded again.")
+        }
+    }
+
+    private var streamingSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text("STREAMING")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+
+                Text("Low-latency models for hands-free dictation and live meeting captions.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            .padding(.leading, 2)
+            .padding(.top, MuesliTheme.spacing8)
+
+            ForEach(BackendOption.streaming, id: \.model) { option in
+                modelCard(
+                    option: option,
+                    logo: logoForBackend(option)
+                )
+            }
+
+            liveCaptionModelCard
         }
     }
 
