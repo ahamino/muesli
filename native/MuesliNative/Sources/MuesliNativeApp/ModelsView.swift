@@ -169,18 +169,20 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             ForEach(BackendOption.streaming, id: \.model) { option in
-                modelCard(
-                    option: option,
-                    logo: logoForBackend(option),
-                    isActive: appState.config.enableLiveStreamingPartials
-                        && appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35,
-                    onSetActive: {
-                        controller.updateConfig {
-                            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
-                            $0.enableLiveStreamingPartials = true
+                if let liveCaptionBackend = MeetingLiveCaptionBackend(rawValue: option.backend) {
+                    modelCard(
+                        option: option,
+                        logo: logoForBackend(option),
+                        isActive: appState.config.enableLiveStreamingPartials
+                            && appState.config.resolvedMeetingLiveCaptionBackend == liveCaptionBackend,
+                        onSetActive: {
+                            controller.updateConfig {
+                                $0.meetingLiveCaptionBackend = liveCaptionBackend.rawValue
+                                $0.enableLiveStreamingPartials = true
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
 
             liveCaptionModelCard

@@ -1080,12 +1080,7 @@ final class MuesliController: NSObject {
         }
         dictationAudioRoutingController.selectedInputDeviceUID = config.dictationInputDeviceUID
         historyWindowController?.updateBackendLabel()
-        if config.showFloatingIndicator {
-            indicator.ensureVisible(config: config)
-        } else {
-            indicator.closeIfIdle()
-        }
-        indicator.refreshMeetingTranscriptPreference(config: config)
+        refreshIndicatorVisibility()
         appState.selectedBackend = selectedBackend
         appState.selectedMeetingTranscriptionBackend = selectedMeetingTranscriptionBackend
         appState.selectedMeetingSummaryBackend = selectedMeetingSummaryBackend
@@ -1123,6 +1118,11 @@ final class MuesliController: NSObject {
         appState.liveMeetingTranscriptOwnerID = nil
         liveMeetingTranscriptGeneration = nil
         indicator.updateMeetingTranscript(transcript: "", partialYou: "", partialOthers: "")
+    }
+
+    private func isCurrentLiveMeetingTranscriptSession(ownerID: Int64, generation: UUID) -> Bool {
+        appState.liveMeetingTranscriptOwnerID == ownerID
+            && liveMeetingTranscriptGeneration == generation
     }
 
     private func refreshContributionMilestonePrompt(totalWords: Int, totalMeetings: Int) {
@@ -4954,8 +4954,10 @@ final class MuesliController: NSObject {
                 meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
                     Task { @MainActor [weak self, weak meetingSession] in
                         guard let self else { return }
-                        guard self.appState.liveMeetingTranscriptOwnerID == meetingID,
-                              self.liveMeetingTranscriptGeneration == transcriptGeneration else { return }
+                        guard self.isCurrentLiveMeetingTranscriptSession(
+                            ownerID: meetingID,
+                            generation: transcriptGeneration
+                        ) else { return }
                         let liveTranscriptStart = meetingSession?.startTime ?? Date()
                         let liveTranscriptCalendar = Calendar(identifier: .gregorian)
                         let entries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
@@ -4997,8 +4999,10 @@ final class MuesliController: NSObject {
                 meetingSession.onPartialTranscript = { [weak self] speaker, tail in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        guard self.appState.liveMeetingTranscriptOwnerID == meetingID,
-                              self.liveMeetingTranscriptGeneration == transcriptGeneration else { return }
+                        guard self.isCurrentLiveMeetingTranscriptSession(
+                            ownerID: meetingID,
+                            generation: transcriptGeneration
+                        ) else { return }
                         if speaker == "You" {
                             guard self.appState.liveMeetingPartialYou != tail else { return }
                             self.appState.liveMeetingPartialYou = tail

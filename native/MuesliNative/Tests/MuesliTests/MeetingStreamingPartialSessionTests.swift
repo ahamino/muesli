@@ -219,6 +219,25 @@ struct MeetingStreamingPartialSessionTests {
         #expect(await waitUntil { collector.latest == " two" })
     }
 
+    @Test("a chunk retiring after pause cannot restore its stale tail")
+    func commitAfterSuspendDoesNotRepublish() async throws {
+        let engine = ScriptedPartialEngine(script: ["one"])
+        let session = MeetingStreamingPartialSession(engine: engine, label: "You")
+        let collector = PartialCollector()
+        session.onPartialUpdate = { collector.record($0) }
+        await session.connect()
+
+        session.enqueue(samples(chunkCount: 1))
+        #expect(await waitUntil { collector.latest == "one" })
+        let segmentID = UUID()
+        session.markSegmentBoundary(id: segmentID)
+
+        session.suspend()
+        #expect(await waitUntil { collector.latest == "" })
+        session.commitSegment(id: segmentID)
+        #expect(await remainsTrue { collector.latest == "" })
+    }
+
     @Test("an EOU inference failure clears the tail and goes dormant")
     func failureGoesDormant() async throws {
         let engine = ThrowingPartialEngine()

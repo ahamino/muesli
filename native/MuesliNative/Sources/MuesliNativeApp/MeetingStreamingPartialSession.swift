@@ -255,6 +255,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         var pendingPublicationTail: String?
         var lastPublishedTail: String?
         var isPublicationScheduled = false
+        var lifecycleRevision: UInt64 = 0
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -320,8 +321,8 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     }
 
     func commitSegment(id: UUID) {
-        let tail: String? = state.withLock { s in
-            guard !s.isStopped, !s.didFail else { return nil }
+        let publication: (tail: String, revision: UInt64)? = state.withLock { s in
+            guard !s.isStopped, !s.isSuspended, !s.didFail else { return nil }
             guard let segmentIndex = s.pendingSegments.firstIndex(where: { $0.id == id }) else { return nil }
             s.pendingSegments[segmentIndex].isCommitted = true
             var didAdvance = false
@@ -334,10 +335,10 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
                 didAdvance = true
             }
             guard didAdvance else { return nil }
-            return visibleTail(for: s)
+            return (visibleTail(for: s), s.lifecycleRevision)
         }
-        if let tail {
-            publishImmediately(tail)
+        if let publication {
+            publishImmediately(publication.tail, expectedRevision: publication.revision)
         }
     }
 
@@ -347,6 +348,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     func suspend() {
         state.withLock { s in
             s.isSuspended = true
+            s.lifecycleRevision &+= 1
             s.sampleBuffer.removeAll(keepingCapacity: true)
             s.chunkQueue.removeAll(keepingCapacity: true)
             s.committedPrefixLength = s.engineText.count
@@ -396,6 +398,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     func stop() {
         state.withLock { s in
             s.isStopped = true
+            s.lifecycleRevision &+= 1
             s.sampleBuffer.removeAll()
             s.chunkQueue.removeAll()
             s.engineText = ""
@@ -446,6 +449,7 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
     private func goDormant(error: Error) {
         state.withLock { s in
             s.didFail = true
+            s.lifecycleRevision &+= 1
             s.isDraining = false
             s.sampleBuffer.removeAll()
             s.chunkQueue.removeAll()
@@ -496,8 +500,11 @@ final class MeetingStreamingPartialSession: @unchecked Sendable {
         }
     }
 
-    private func publishImmediately(_ tail: String) {
+    private func publishImmediately(_ tail: String, expectedRevision: UInt64? = nil) {
         let shouldPublish = state.withLock { s -> Bool in
+            if let expectedRevision, expectedRevision != s.lifecycleRevision {
+                return false
+            }
             s.pendingPublicationTail = nil
             guard tail != s.lastPublishedTail else { return false }
             s.lastPublishedTail = tail
