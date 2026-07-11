@@ -69,7 +69,7 @@ struct BackendOption: Equatable {
         model: "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
         label: "Nemotron 3.5 Multilingual",
         sizeLabel: "~665 MB",
-        description: "Multilingual streaming RNNT via FluidInference. For meetings, one continuous transcript is used live and as the final raw transcript. Also supports hands-free dictation. Native punctuation; append-only with no corrections.",
+        description: "NVIDIA Nemotron 3.5 streaming RNNT via FluidInference. Multilingual incl. Hindi, Chinese, Japanese + 100+ locales (auto-detect). Native punctuation. Hold-to-talk or double-tap handsfree (live text). For meetings, one continuous transcript is used live and as the final raw transcript. Append-only with no corrections.",
         recommended: false
     )
 
