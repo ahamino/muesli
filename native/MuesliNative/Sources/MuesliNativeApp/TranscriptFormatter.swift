@@ -56,20 +56,22 @@ enum TranscriptFormatter {
             + systemSegments.map { ($0, systemKey(for: $0)) }
         let sortedKeyed = keyed.sorted { $0.segment.start < $1.segment.start }
 
-        // The earliest local speaker is "You"; every other distinct voice gets a
-        // "Speaker N" assigned lazily in first-appearance order, so there are no gaps.
-        let youKey: SpeakerKey? = useMicDiarization
-            ? micDiarizationSegments?
-                .min(by: { $0.startTimeSeconds < $1.startTimeSeconds })
-                .map { SpeakerKey.speaker("mic:\($0.speakerId)") }
-            : nil
+        // The first local (mic) speaker to actually appear in the transcript becomes
+        // "You"; every other distinct voice gets a "Speaker N" assigned lazily in
+        // first-appearance order, so there are no gaps. Anchoring "You" to the earliest
+        // *rendered* mic speaker (rather than the earliest diarized one) guarantees a
+        // "You" even when the earliest diarized speaker produced no ASR segment.
+        var youKey: SpeakerKey?
         var labelForKey: [SpeakerKey: String] = [:]
         var nextSpeakerNumber = 1
         func label(for key: SpeakerKey) -> String {
             switch key {
             case .fixed(let fixedLabel):
                 return fixedLabel
-            case .speaker:
+            case .speaker(let rawId):
+                if rawId.hasPrefix("mic:"), youKey == nil {
+                    youKey = key
+                }
                 if key == youKey { return "You" }
                 if let existing = labelForKey[key] { return existing }
                 let assigned = "Speaker \(nextSpeakerNumber)"

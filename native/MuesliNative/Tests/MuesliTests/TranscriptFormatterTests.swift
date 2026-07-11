@@ -639,6 +639,31 @@ struct TranscriptFormatterTests {
         #expect(!result.contains("Speaker 2"))
     }
 
+    @Test("You anchors to the earliest rendered local speaker, not the earliest diarized one")
+    func youAnchorsToEarliestRenderedLocal() {
+        // Speaker A is diarized earliest (0.0–0.5) but produced no ASR mic segment;
+        // speaker B is the first local voice that actually renders. B must be "You",
+        // guaranteeing a "You" in the transcript rather than everyone as Speaker N.
+        let mic = [
+            SpeechSegment(start: 2.0, end: 4.0, text: "bob talking"),
+            SpeechSegment(start: 5.0, end: 7.0, text: "carol talking"),
+        ]
+        let micDiar = [
+            makeDiarSeg(speakerId: "A", start: 0.0, end: 0.5),   // earliest, never renders
+            makeDiarSeg(speakerId: "B", start: 2.0, end: 4.0),
+            makeDiarSeg(speakerId: "C", start: 5.0, end: 7.0),
+        ]
+        let result = TranscriptFormatter.merge(
+            micSegments: mic,
+            systemSegments: [],
+            micDiarizationSegments: micDiar,
+            diarizationSegments: nil,
+            meetingStart: Date(timeIntervalSince1970: 0)
+        )
+        #expect(result.contains("You: bob talking"))
+        #expect(result.contains("Speaker 1: carol talking"))
+    }
+
     // MARK: - Helpers
 
     private func makeDiarSeg(speakerId: String, start: Float, end: Float) -> TimedSpeakerSegment {

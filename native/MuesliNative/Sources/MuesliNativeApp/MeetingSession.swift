@@ -448,17 +448,27 @@ final class MeetingSession {
         let coordinator = transcriptionCoordinator
         async let micDiarizationTask: [TimedSpeakerSegment]? = {
             guard let rawStreamingMicURL, speakerBounds != nil else { return nil }
-            return try? await coordinator.diarize(
-                at: rawStreamingMicURL,
-                speakerBounds: speakerBounds
-            )?.segments
+            do {
+                return try await coordinator.diarize(
+                    at: rawStreamingMicURL,
+                    speakerBounds: speakerBounds
+                )?.segments
+            } catch {
+                fputs("[meeting] mic diarization failed, keeping \"You\" labels: \(error)\n", stderr)
+                return nil
+            }
         }()
         async let systemDiarizationTask: [TimedSpeakerSegment]? = {
             guard let systemAudioURL else { return nil }
-            return try? await coordinator.diarize(
-                at: systemAudioURL,
-                speakerBounds: speakerBounds
-            )?.segments
+            do {
+                return try await coordinator.diarize(
+                    at: systemAudioURL,
+                    speakerBounds: speakerBounds
+                )?.segments
+            } catch {
+                fputs("[meeting] system diarization failed, transcript stays unlabeled: \(error)\n", stderr)
+                return nil
+            }
         }()
         let micDiarizationSegments = await micDiarizationTask
         let diarizationSegments = await systemDiarizationTask
