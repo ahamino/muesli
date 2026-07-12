@@ -12,6 +12,7 @@ struct InsightsView: View {
     @State private var errorMessage: String?
     @State private var loadGeneration = 0
     @State private var isSharing = false
+    @State private var initialScrollGate = InsightsInitialScrollGate()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
@@ -56,7 +57,7 @@ struct InsightsView: View {
             }
             .task(id: loadGeneration) {
                 await refresh()
-                guard snapshot != nil else { return }
+                guard initialScrollGate.consume(hasSnapshot: snapshot != nil) else { return }
                 if reduceMotion {
                     proxy.scrollTo(initialSection, anchor: .top)
                 } else {
@@ -420,6 +421,16 @@ struct InsightsView: View {
     private func dayCount(_ value: Int) -> String { "\(value) \(value == 1 ? "day" : "days")" }
 }
 
+struct InsightsInitialScrollGate {
+    private(set) var hasScrolled = false
+
+    mutating func consume(hasSnapshot: Bool) -> Bool {
+        guard hasSnapshot, !hasScrolled else { return false }
+        hasScrolled = true
+        return true
+    }
+}
+
 private enum InsightsMetric: CaseIterable {
     case words, meetings
     var label: String { self == .words ? "Words" : "Meetings" }
@@ -595,9 +606,13 @@ private struct WordCloudPanel: View {
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
             } else {
                 WordFlowLayout(spacing: 9) {
-                    ForEach(words.prefix(32)) { item in
+                    ForEach(displayedWords) { item in
                         Text(item.word)
-                            .font(.system(size: fontSize(item), weight: item.count == words.first?.count ? .bold : .medium, design: .rounded))
+                            .font(.system(
+                                size: InsightsWordCloudSizing.fontSize(for: item, displayedWords: displayedWords),
+                                weight: item.count == displayedWords.first?.count ? .bold : .medium,
+                                design: .rounded
+                            ))
                             .foregroundStyle(wordColor(item))
                             .help("Used \(item.count.formatted()) times")
                             .accessibilityLabel("\(item.word), used \(item.count.formatted()) times")
@@ -610,17 +625,23 @@ private struct WordCloudPanel: View {
         .insightsPanel()
     }
 
-    private func fontSize(_ item: InsightsWordFrequency) -> CGFloat {
-        let high = max(1, words.first?.count ?? 1)
-        let low = max(1, words.last?.count ?? 1)
-        guard high > low else { return 18 }
-        let ratio = log(Double(item.count - low + 1)) / log(Double(high - low + 1))
-        return 13 + CGFloat(ratio) * 20
+    private var displayedWords: [InsightsWordFrequency] {
+        Array(words.prefix(32))
     }
 
     private func wordColor(_ item: InsightsWordFrequency) -> Color {
         guard item.id != words.first?.id else { return .cyan }
         return item.count >= (words.first?.count ?? 0) / 2 ? MuesliTheme.accent : InsightsPalette.secondaryText
+    }
+}
+
+enum InsightsWordCloudSizing {
+    static func fontSize(for item: InsightsWordFrequency, displayedWords: [InsightsWordFrequency]) -> CGFloat {
+        let high = max(1, displayedWords.first?.count ?? 1)
+        let low = max(1, displayedWords.last?.count ?? 1)
+        guard high > low else { return 18 }
+        let ratio = log(Double(item.count - low + 1)) / log(Double(high - low + 1))
+        return 13 + CGFloat(ratio) * 20
     }
 }
 

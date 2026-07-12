@@ -108,6 +108,63 @@ struct InsightsTests {
         #expect(encoded.count < pairs.count * MemoryLayout<InsightsContributionCodec.Pair>.stride)
     }
 
+    @Test("contribution codec rejects oversized and malformed frames without allocating")
+    func contributionCodecRejectsInvalidFrames() {
+        let oversized = Data([1]) + encodedVarint(UInt64(InsightsContributionCodec.maximumDecodedBytes + 1))
+        let exceedsInt = Data([1]) + encodedVarint(UInt64(Int.max) + 1) + Data([0x01])
+        let truncatedRaw = Data([0]) + encodedVarint(8) + Data([0x01, 0x01])
+        let unknownMarker = Data([2, 0])
+
+        #expect(InsightsContributionCodec.decode(oversized).isEmpty)
+        #expect(InsightsContributionCodec.decode(exceedsInt).isEmpty)
+        #expect(InsightsContributionCodec.decode(truncatedRaw).isEmpty)
+        #expect(InsightsContributionCodec.decode(unknownMarker).isEmpty)
+    }
+
+    @Test("initial cache construction crosses bounded reconciliation batches")
+    func initialCacheConstructionIsBatched() throws {
+        let store = try makeStore()
+        let now = Date(timeIntervalSince1970: 1_784_092_800)
+        for index in 0..<130 {
+            let end = now.addingTimeInterval(Double(-index))
+            try store.insertDictation(
+                text: "batchword batchword",
+                durationSeconds: 1,
+                startedAt: end.addingTimeInterval(-1),
+                endedAt: end
+            )
+        }
+
+        let snapshot = try store.insightsSnapshot(range: .allTime, now: now)
+        let footprint = try cacheFootprint(store)
+
+        #expect(snapshot.lifetime.dictationWords == 260)
+        #expect(snapshot.dictationWords.first == InsightsWordFrequency(word: "batchword", count: 260))
+        #expect(footprint.records == 130)
+    }
+
+    @Test("changing calendar timezone rebuilds the cache without changing lifetime totals")
+    func timezoneCacheSignatureRebuild() throws {
+        let store = try makeStore()
+        let now = Date(timeIntervalSince1970: 1_784_092_800)
+        try store.insertDictation(
+            text: "timezone boundary",
+            durationSeconds: 5,
+            startedAt: now.addingTimeInterval(-5),
+            endedAt: now
+        )
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        var losAngeles = Calendar(identifier: .gregorian)
+        losAngeles.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+
+        let first = try store.insightsSnapshot(range: .allTime, now: now, calendar: utc)
+        let rebuilt = try store.insightsSnapshot(range: .allTime, now: now, calendar: losAngeles)
+
+        #expect(first.lifetime == rebuilt.lifetime)
+        #expect(try cacheFootprint(store).records == 1)
+    }
+
     @Test("unchanged snapshots reuse the same record cache")
     func unchangedSnapshotReusesCache() throws {
         let store = try makeStore()
@@ -214,6 +271,44 @@ struct InsightsTests {
         let words = InsightsWordAnalyzer.frequencies(in: text, limit: 48)
         #expect(words.count == 48)
         #expect(words == words.sorted { $0.count == $1.count ? $0.word < $1.word : $0.count > $1.count })
+    }
+
+    @Test("insights entry section scroll happens only after the first successful load")
+    func initialSectionScrollIsOneShot() {
+        var gate = InsightsInitialScrollGate()
+        let beforeSnapshot = gate.consume(hasSnapshot: false)
+        let firstSnapshot = gate.consume(hasSnapshot: true)
+        let refreshedSnapshot = gate.consume(hasSnapshot: true)
+
+        #expect(!beforeSnapshot)
+        #expect(firstSnapshot)
+        #expect(!refreshedSnapshot)
+    }
+
+    @Test("word cloud sizing uses only the words that are displayed")
+    func wordCloudSizingUsesDisplayedWords() {
+        let allWords = (1...48).map {
+            InsightsWordFrequency(word: "word\($0)", count: 49 - $0)
+        }
+        let displayed = Array(allWords.prefix(32))
+
+        let largest = InsightsWordCloudSizing.fontSize(for: displayed[0], displayedWords: displayed)
+        let smallest = InsightsWordCloudSizing.fontSize(for: displayed[31], displayedWords: displayed)
+
+        #expect(largest == 33)
+        #expect(smallest == 13)
+    }
+
+    private func encodedVarint(_ value: UInt64) -> Data {
+        var remaining = value
+        var result = Data()
+        repeat {
+            var byte = UInt8(remaining & 0x7f)
+            remaining >>= 7
+            if remaining != 0 { byte |= 0x80 }
+            result.append(byte)
+        } while remaining != 0
+        return result
     }
 
     private func cacheFootprint(_ store: DictationStore) throws -> (records: Int, blobBytes: Int) {

@@ -1043,123 +1043,202 @@ public final class DictationStore {
         let date: Date
         let wordCount: Int
         let duration: Double
-        let text: String
         let deleted: Bool
         let eligible: Bool
     }
 
+    private static let insightsCacheBatchSize = 64
+
     private func reconcileInsightsCache(db: OpaquePointer?, calendar: Calendar) throws {
         let signature = "2|\(calendar.timeZone.identifier)"
         if try insightsCacheMeta("signature", db: db) != signature {
+            try resetInsightsCache(signature: signature, db: db)
+        }
+
+        while true {
+            let stale = try staleInsightsCacheKeys(db: db, limit: Self.insightsCacheBatchSize)
+            guard !stale.isEmpty else { break }
+            for (kind, id) in stale {
+                if Task.isCancelled { throw CancellationError() }
+                try withInsightsWriteTransaction(db: db) {
+                    try removeCachedInsightsRecord(kind: kind, id: id, db: db)
+                }
+            }
+        }
+
+        while true {
+            let changed = try changedInsightsSources(db: db, limit: Self.insightsCacheBatchSize)
+            guard !changed.isEmpty else { break }
+            for source in changed {
+                if Task.isCancelled { throw CancellationError() }
+                var counts: [String: Int] = [:]
+                if !source.deleted, source.eligible {
+                    guard let text = try insightsSourceText(source, db: db) else { continue }
+                    if source.kind == "meeting" {
+                        InsightsWordAnalyzer.accumulateMeetingTranscript(text, into: &counts)
+                    } else {
+                        InsightsWordAnalyzer.accumulate(text, into: &counts)
+                    }
+                }
+                try applyInsightsSource(source, counts: counts, calendar: calendar, db: db)
+            }
+        }
+
+        try withInsightsWriteTransaction(db: db) {
+            try exec("""
+            DELETE FROM insights_daily_cache
+              WHERE dictation_words = 0 AND dictation_sessions = 0 AND meeting_words = 0 AND meetings = 0;
+            DELETE FROM insights_daily_tokens WHERE dictation_count = 0 AND meeting_count = 0;
+            DELETE FROM insights_token_totals WHERE dictation_count = 0 AND meeting_count = 0;
+            """, db: db)
+        }
+    }
+
+    private func resetInsightsCache(signature: String, db: OpaquePointer?) throws {
+        try withInsightsWriteTransaction(db: db) {
             try exec("""
             DELETE FROM insights_record_cache;
             DELETE FROM insights_daily_cache;
             DELETE FROM insights_daily_tokens;
             DELETE FROM insights_token_totals;
             DELETE FROM insights_tokens;
-            INSERT INTO insights_cache_meta(key, value) VALUES('signature', '\(signature)')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
             """, db: db)
-        }
-
-        let changed = try changedInsightsSources(db: db)
-        let stale = try staleInsightsCacheKeys(db: db)
-        guard !changed.isEmpty || !stale.isEmpty else { return }
-        try exec("BEGIN IMMEDIATE", db: db)
-        do {
-            for (kind, id) in stale {
-                try removeCachedInsightsRecord(kind: kind, id: id, db: db)
-            }
-            var tokenIDs: [String: Int64] = [:]
-            for source in changed {
-                if Task.isCancelled { throw CancellationError() }
-                do {
-                    try removeCachedInsightsRecord(kind: source.kind, id: source.id, db: db)
-                } catch {
-                    throw NSError(domain: "MuesliInsightsCache", code: 1, userInfo: [NSLocalizedDescriptionKey: "Removing cached \(source.kind) \(source.id): \(error.localizedDescription)"])
-                }
-                guard !source.deleted, source.eligible else {
-                    do {
-                        try markInsightsSourceProcessed(source, day: cacheDay(source.date, calendar: calendar), db: db)
-                    } catch {
-                        throw NSError(domain: "MuesliInsightsCache", code: 2, userInfo: [NSLocalizedDescriptionKey: "Marking cached \(source.kind) \(source.id): \(error.localizedDescription)"])
-                    }
-                    continue
-                }
-                var counts: [String: Int] = [:]
-                if source.kind == "meeting" {
-                    InsightsWordAnalyzer.accumulateMeetingTranscript(source.text, into: &counts)
-                } else {
-                    InsightsWordAnalyzer.accumulate(source.text, into: &counts)
-                }
-                var pairs: [InsightsContributionCodec.Pair] = []
-                for (token, count) in counts {
-                    let tokenID = try tokenIDs[token] ?? internInsightsToken(token, db: db)
-                    tokenIDs[token] = tokenID
-                    pairs.append(.init(tokenID: tokenID, count: count))
-                }
-                try addCachedInsightsRecord(source, day: cacheDay(source.date, calendar: calendar), pairs: pairs, db: db)
-            }
-            try exec("""
-            DELETE FROM insights_daily_cache
-              WHERE dictation_words = 0 AND dictation_sessions = 0 AND meeting_words = 0 AND meetings = 0;
-            DELETE FROM insights_daily_tokens WHERE dictation_count = 0 AND meeting_count = 0;
-            DELETE FROM insights_token_totals WHERE dictation_count = 0 AND meeting_count = 0;
-            COMMIT;
-            """, db: db)
-        } catch {
-            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            throw error
+            let sql = """
+            INSERT INTO insights_cache_meta(key, value) VALUES('signature', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, (signature as NSString).utf8String, -1, nil)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
         }
     }
 
-    private func changedInsightsSources(db: OpaquePointer?) throws -> [InsightsCacheSource] {
+    private func changedInsightsSources(db: OpaquePointer?, limit: Int) throws -> [InsightsCacheSource] {
         let sql = """
-        SELECT 'dictation', d.id, d.updated_at, d.timestamp, d.word_count,
-               COALESCE(d.duration_seconds, 0), COALESCE(d.raw_text, ''),
-               d.deleted_at IS NOT NULL, 1
-        FROM dictations d
-        LEFT JOIN insights_record_cache c ON c.kind = 'dictation' AND c.record_id = d.id
-        WHERE c.record_id IS NULL OR c.source_updated_at != d.updated_at
-        UNION ALL
-        SELECT 'meeting', m.id, m.updated_at, m.start_time, m.word_count,
-               COALESCE(m.duration_seconds, 0),
-               CASE WHEN m.meeting_status = 'note_only' THEN COALESCE(m.manual_notes, '') ELSE COALESCE(m.raw_transcript, '') END,
-               m.deleted_at IS NOT NULL,
-               m.meeting_status IN ('completed', 'note_only')
-        FROM meetings m
-        LEFT JOIN insights_record_cache c ON c.kind = 'meeting' AND c.record_id = m.id
-        WHERE c.record_id IS NULL OR c.source_updated_at != m.updated_at
+        SELECT kind, record_id, source_updated_at, activity_date, word_count,
+               duration_seconds, deleted, eligible
+        FROM (
+            SELECT 'dictation' AS kind, d.id AS record_id, d.updated_at AS source_updated_at,
+                   d.timestamp AS activity_date, d.word_count AS word_count,
+                   COALESCE(d.duration_seconds, 0) AS duration_seconds,
+                   d.deleted_at IS NOT NULL AS deleted, 1 AS eligible
+            FROM dictations d
+            LEFT JOIN insights_record_cache c ON c.kind = 'dictation' AND c.record_id = d.id
+            WHERE c.record_id IS NULL OR c.source_updated_at != d.updated_at
+            UNION ALL
+            SELECT 'meeting', m.id, m.updated_at, m.start_time, m.word_count,
+                   COALESCE(m.duration_seconds, 0), m.deleted_at IS NOT NULL,
+                   m.meeting_status IN ('completed', 'note_only')
+            FROM meetings m
+            LEFT JOIN insights_record_cache c ON c.kind = 'meeting' AND c.record_id = m.id
+            WHERE c.record_id IS NULL OR c.source_updated_at != m.updated_at
+        )
+        ORDER BY kind, record_id
+        LIMIT ?
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
         defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(limit))
         var rows: [InsightsCacheSource] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            guard let date = parseISODate(stringColumn(statement, index: 3)) else { continue }
+            let parsedDate = parseISODate(stringColumn(statement, index: 3))
             rows.append(InsightsCacheSource(
                 kind: stringColumn(statement, index: 0), id: sqlite3_column_int64(statement, 1),
-                updatedAt: sqlite3_column_double(statement, 2), date: date,
+                updatedAt: sqlite3_column_double(statement, 2),
+                date: parsedDate ?? Date(timeIntervalSince1970: 0),
                 wordCount: Int(sqlite3_column_int64(statement, 4)), duration: sqlite3_column_double(statement, 5),
-                text: stringColumn(statement, index: 6), deleted: sqlite3_column_int(statement, 7) != 0,
-                eligible: sqlite3_column_int(statement, 8) != 0
+                deleted: sqlite3_column_int(statement, 6) != 0,
+                eligible: parsedDate != nil && sqlite3_column_int(statement, 7) != 0
             ))
         }
         return rows
     }
 
-    private func staleInsightsCacheKeys(db: OpaquePointer?) throws -> [(String, Int64)] {
+    private func insightsSourceText(_ source: InsightsCacheSource, db: OpaquePointer?) throws -> String? {
+        let sql: String
+        if source.kind == "meeting" {
+            sql = """
+            SELECT CASE WHEN meeting_status = 'note_only' THEN COALESCE(manual_notes, '') ELSE COALESCE(raw_transcript, '') END
+            FROM meetings WHERE id = ? AND updated_at = ?
+            """
+        } else {
+            sql = "SELECT COALESCE(raw_text, '') FROM dictations WHERE id = ? AND updated_at = ?"
+        }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, source.id)
+        sqlite3_bind_double(statement, 2, source.updatedAt)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return stringColumn(statement, index: 0)
+    }
+
+    @discardableResult
+    private func applyInsightsSource(
+        _ source: InsightsCacheSource,
+        counts: [String: Int],
+        calendar: Calendar,
+        db: OpaquePointer?
+    ) throws -> Bool {
+        try withInsightsWriteTransaction(db: db) {
+            guard try insightsSourceIsCurrent(source, db: db) else { return false }
+            try removeCachedInsightsRecord(kind: source.kind, id: source.id, db: db)
+            let day = cacheDay(source.date, calendar: calendar)
+            guard !source.deleted, source.eligible else {
+                try markInsightsSourceProcessed(source, day: day, db: db)
+                return true
+            }
+            var pairs: [InsightsContributionCodec.Pair] = []
+            pairs.reserveCapacity(counts.count)
+            for (token, count) in counts {
+                pairs.append(.init(tokenID: try internInsightsToken(token, db: db), count: count))
+            }
+            try addCachedInsightsRecord(source, day: day, pairs: pairs, db: db)
+            return true
+        }
+    }
+
+    private func insightsSourceIsCurrent(_ source: InsightsCacheSource, db: OpaquePointer?) throws -> Bool {
+        let table = source.kind == "meeting" ? "meetings" : "dictations"
+        let sql = "SELECT 1 FROM \(table) WHERE id = ? AND updated_at = ? LIMIT 1"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, source.id)
+        sqlite3_bind_double(statement, 2, source.updatedAt)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private func staleInsightsCacheKeys(db: OpaquePointer?, limit: Int) throws -> [(String, Int64)] {
         let sql = """
         SELECT kind, record_id FROM insights_record_cache c
         WHERE (kind = 'dictation' AND NOT EXISTS (SELECT 1 FROM dictations d WHERE d.id = c.record_id))
            OR (kind = 'meeting' AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.id = c.record_id))
+        ORDER BY kind, record_id
+        LIMIT ?
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
         defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(limit))
         var keys: [(String, Int64)] = []
         while sqlite3_step(statement) == SQLITE_ROW { keys.append((stringColumn(statement, index: 0), sqlite3_column_int64(statement, 1))) }
         return keys
+    }
+
+    private func withInsightsWriteTransaction<T>(db: OpaquePointer?, _ work: () throws -> T) throws -> T {
+        try exec("BEGIN IMMEDIATE", db: db)
+        do {
+            let result = try work()
+            try exec("COMMIT", db: db)
+            return result
+        } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
     }
 
     private func addCachedInsightsRecord(_ source: InsightsCacheSource, day: String, pairs: [InsightsContributionCodec.Pair], db: OpaquePointer?) throws {
@@ -3489,6 +3568,9 @@ public final class DictationStore {
         )
         var db: OpaquePointer?
         if sqlite3_open(databaseURL.path, &db) != SQLITE_OK {
+            throw lastError(db)
+        }
+        if sqlite3_busy_timeout(db, 5_000) != SQLITE_OK {
             throw lastError(db)
         }
         if sqlite3_exec(db, "PRAGMA foreign_keys=ON", nil, nil, nil) != SQLITE_OK {

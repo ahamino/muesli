@@ -2,6 +2,8 @@ import Compression
 import Foundation
 
 enum InsightsContributionCodec {
+    static let maximumDecodedBytes = 16 * 1024 * 1024
+
     struct Pair: Equatable {
         let tokenID: Int64
         let count: Int
@@ -22,15 +24,18 @@ enum InsightsContributionCodec {
     }
 
     static func decode(_ data: Data) -> [Pair] {
-        guard let marker = data.first else { return [] }
+        guard let marker = data.first, marker == 0 || marker == 1 else { return [] }
         var offset = 1
-        guard let originalCount = readVarint(data, offset: &offset) else { return [] }
+        guard let originalCount = readVarint(data, offset: &offset),
+              originalCount <= UInt64(Int.max),
+              originalCount <= UInt64(maximumDecodedBytes) else { return [] }
         let payload = data.suffix(from: offset)
         let raw: Data
         if marker == 1 {
             guard let decoded = decompress(Data(payload), originalCount: Int(originalCount)) else { return [] }
             raw = decoded
         } else {
+            guard payload.count == Int(originalCount) else { return [] }
             raw = Data(payload)
         }
 
@@ -40,7 +45,7 @@ enum InsightsContributionCodec {
         while rawOffset < raw.count {
             guard let delta = readVarint(raw, offset: &rawOffset),
                   let count = readVarint(raw, offset: &rawOffset),
-                  delta <= UInt64(Int64.max), count <= UInt64(Int.max) else { return [] }
+                  delta <= UInt64(Int64.max - tokenID), count <= UInt64(Int.max) else { return [] }
             tokenID += Int64(delta)
             pairs.append(Pair(tokenID: tokenID, count: Int(count)))
         }
@@ -78,7 +83,7 @@ enum InsightsContributionCodec {
     }
 
     private static func decompress(_ data: Data, originalCount: Int) -> Data? {
-        guard originalCount >= 0 else { return nil }
+        guard originalCount >= 0, originalCount <= maximumDecodedBytes else { return nil }
         if originalCount == 0 { return Data() }
         var output = Data(count: originalCount)
         let written = output.withUnsafeMutableBytes { destination in
