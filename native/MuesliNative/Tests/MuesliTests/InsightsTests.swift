@@ -299,6 +299,31 @@ struct InsightsTests {
         #expect(smallest == 13)
     }
 
+    @Test("activity heatmap marks the visible starting month and later month boundaries")
+    func activityHeatmapMonthMarkers() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 6, day: 20))!
+        let activity = (0..<45).map { offset in
+            InsightsDailyActivity(
+                date: calendar.date(byAdding: .day, value: offset, to: start)!,
+                words: 0,
+                meetings: 0
+            )
+        }
+
+        let weeks = ActivityHeatmapCalendarLayout.weeks(from: activity, calendar: calendar)
+        let markerMonths = weeks.enumerated().compactMap { index, week in
+            ActivityHeatmapCalendarLayout.monthMarker(
+                for: week,
+                at: index,
+                calendar: calendar
+            ).map { calendar.component(.month, from: $0) }
+        }
+
+        #expect(markerMonths == [6, 7, 8])
+    }
+
     @Test("word flow layout wraps after the available width and uses the tallest row item")
     func wordFlowLayoutWrapsAndTracksRowHeight() {
         let result = WordFlowLayout(spacing: 10).layout(

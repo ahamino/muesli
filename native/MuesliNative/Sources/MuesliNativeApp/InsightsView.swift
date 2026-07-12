@@ -457,30 +457,87 @@ private enum InsightsPalette {
     }
 }
 
+enum ActivityHeatmapCalendarLayout {
+    static func weeks(
+        from activity: [InsightsDailyActivity],
+        calendar: Calendar
+    ) -> [[InsightsDailyActivity]] {
+        Dictionary(grouping: activity) { day -> Date in
+            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: day.date)
+            return calendar.date(from: components) ?? day.date
+        }
+        .sorted { $0.key < $1.key }
+        .map { _, days in days.sorted { $0.date < $1.date } }
+    }
+
+    static func monthMarker(
+        for week: [InsightsDailyActivity],
+        at index: Int,
+        calendar: Calendar
+    ) -> Date? {
+        if let monthStart = week.first(where: { calendar.component(.day, from: $0.date) == 1 }) {
+            return monthStart.date
+        }
+        return index == 0 ? week.first?.date : nil
+    }
+}
+
 private struct ActivityHeatmap: View {
     let activity: [InsightsDailyActivity]
     let metric: InsightsMetric
     private let cell: CGFloat = 14
     private let gap: CGFloat = 4
+    private let monthLabelHeight: CGFloat = 14
+    private let weekdayLabels = ["", "Mon", "", "Wed", "", "Fri", ""]
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: gap) {
-                    ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                        VStack(spacing: gap) {
-                            ForEach(0..<7, id: \.self) { weekday in
-                                if let day = week.first(where: { Calendar.current.component(.weekday, from: $0.date) - 1 == weekday }) {
-                                    cellView(day)
-                                } else {
-                                    Color.clear.frame(width: cell, height: cell)
-                                }
-                            }
-                        }
-                        .id(week.first?.date)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .trailing, spacing: gap) {
+                    Color.clear.frame(width: 24, height: monthLabelHeight)
+                    ForEach(Array(weekdayLabels.enumerated()), id: \.offset) { _, label in
+                        Text(label)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(InsightsPalette.tertiaryText)
+                            .frame(width: 24, height: cell, alignment: .trailing)
                     }
                 }
-                .padding(.vertical, 3)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: gap) {
+                        ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
+                            VStack(alignment: .leading, spacing: gap) {
+                                Color.clear
+                                    .frame(width: cell, height: monthLabelHeight)
+                                    .overlay(alignment: .leading) {
+                                        if let marker = ActivityHeatmapCalendarLayout.monthMarker(
+                                            for: week,
+                                            at: index,
+                                            calendar: calendar
+                                        ) {
+                                            Text(marker.formatted(.dateTime.month(.abbreviated)))
+                                                .font(.system(size: 9, weight: .medium))
+                                                .foregroundStyle(InsightsPalette.tertiaryText)
+                                                .fixedSize()
+                                        }
+                                    }
+                                VStack(spacing: gap) {
+                                    ForEach(0..<7, id: \.self) { weekday in
+                                        if let day = week.first(where: {
+                                            calendar.component(.weekday, from: $0.date) - 1 == weekday
+                                        }) {
+                                            cellView(day)
+                                        } else {
+                                            Color.clear.frame(width: cell, height: cell)
+                                        }
+                                    }
+                                }
+                                .id(week.first?.date)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
             }
             .onAppear { scrollToLatest(proxy) }
             .onChange(of: activity.last?.date) { _, _ in scrollToLatest(proxy) }
@@ -495,14 +552,10 @@ private struct ActivityHeatmap: View {
         }
     }
 
+    private var calendar: Calendar { Calendar.current }
+
     private var weeks: [[InsightsDailyActivity]] {
-        Dictionary(grouping: activity) { day -> Date in
-            let calendar = Calendar.current
-            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: day.date)
-            return calendar.date(from: components) ?? day.date
-        }
-        .sorted { $0.key < $1.key }
-        .map(\.value)
+        ActivityHeatmapCalendarLayout.weeks(from: activity, calendar: calendar)
     }
 
     private var maximum: Int {

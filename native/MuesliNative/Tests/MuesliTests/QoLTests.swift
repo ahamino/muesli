@@ -4,6 +4,33 @@ import Foundation
 import MuesliCore
 @testable import MuesliNativeApp
 
+@Suite("Dictation backend readiness")
+struct DictationBackendReadinessTests {
+    @Test("preparing backend blocks dictation with existing warmup copy")
+    func preparingBlocksDictation() {
+        let readiness = DictationBackendReadiness.preparing
+
+        #expect(!readiness.allowsDictation)
+        #expect(readiness.blockingMessage(backendLabel: "Parakeet v3") == "Warming up Parakeet v3...")
+    }
+
+    @Test("ready backend allows dictation")
+    func readyAllowsDictation() {
+        let readiness = DictationBackendReadiness.ready
+
+        #expect(readiness.allowsDictation)
+        #expect(readiness.blockingMessage(backendLabel: "Parakeet v3") == nil)
+    }
+
+    @Test("failed backend remains blocked with actionable status")
+    func failedBlocksDictation() {
+        let readiness = DictationBackendReadiness.failed
+
+        #expect(!readiness.allowsDictation)
+        #expect(readiness.blockingMessage(backendLabel: "Parakeet v3") == "Parakeet v3 unavailable")
+    }
+}
+
 // MARK: - ChatGPT File-based Token Storage
 
 @Suite("ChatGPT Token Storage")
