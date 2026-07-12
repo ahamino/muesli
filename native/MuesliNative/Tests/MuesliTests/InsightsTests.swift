@@ -145,6 +145,22 @@ struct InsightsTests {
         #expect(Array(templatePNG.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10])
     }
 
+    @Test("share image write failures return inline feedback")
+    func shareImageWriteFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-share-write-failure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let result = InsightsShareFileWriter.write(Data([0x89, 0x50, 0x4E, 0x47]), to: directory)
+
+        guard case .failed(let message) = result else {
+            Issue.record("Writing image data to a directory should fail")
+            return
+        }
+        #expect(!message.isEmpty)
+    }
+
     @Test("calendar range remains day-correct across daylight saving changes")
     func daylightSavingRange() throws {
         let store = try makeStore()

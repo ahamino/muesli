@@ -10,6 +10,7 @@ struct InsightsShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var image: NSImage?
     @State private var confirmation: String?
+    @State private var saveErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -43,6 +44,33 @@ struct InsightsShareSheet: View {
                 }
             }
             .accessibilityLabel("Preview of your Muesli activity image")
+
+            if let saveErrorMessage {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("The image couldn’t be saved")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(saveErrorMessage)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Button {
+                        self.saveErrorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss save error")
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.red.opacity(0.18)))
+            }
 
             HStack(spacing: 10) {
                 Button {
@@ -93,17 +121,24 @@ struct InsightsShareSheet: View {
 
     private func saveImage() {
         guard let image, let png = InsightsShareRenderer.pngData(for: image) else { return }
+        saveErrorMessage = nil
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "Muesli activity – \(rangeLabel).png"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            do {
-                try png.write(to: url, options: .atomic)
-                showConfirmation("Saved")
-            } catch {
-                NSAlert(error: error).runModal()
+            Task { @MainActor in
+                let result = await Task.detached(priority: .utility) {
+                    InsightsShareFileWriter.write(png, to: url)
+                }.value
+                switch result {
+                case .saved:
+                    saveErrorMessage = nil
+                    showConfirmation("Saved")
+                case .failed(let message):
+                    saveErrorMessage = message
+                }
             }
         }
     }
@@ -119,6 +154,22 @@ struct InsightsShareSheet: View {
             try? await Task.sleep(for: .seconds(2))
             guard confirmation == message else { return }
             withAnimation(.easeOut(duration: 0.16)) { confirmation = nil }
+        }
+    }
+}
+
+enum InsightsShareSaveResult: Equatable, Sendable {
+    case saved
+    case failed(String)
+}
+
+enum InsightsShareFileWriter {
+    static func write(_ png: Data, to url: URL) -> InsightsShareSaveResult {
+        do {
+            try png.write(to: url, options: .atomic)
+            return .saved
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 }
