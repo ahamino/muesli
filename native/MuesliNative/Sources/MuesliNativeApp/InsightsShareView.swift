@@ -188,13 +188,12 @@ private struct InsightsShareCard: View {
                     .scaledToFill()
                     .frame(width: 1200, height: 630)
                     .clipped()
-                    .opacity(0.28)
             }
 
             LinearGradient(
                 colors: [
-                    Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.39),
-                    Color(red: 0.045, green: 0.062, blue: 0.080).opacity(0.44),
+                    Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.08),
+                    Color(red: 0.045, green: 0.062, blue: 0.080).opacity(0.12),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -214,6 +213,11 @@ private struct InsightsShareCard: View {
                     }
                     Spacer()
                     MuesliShareMark(color: pale)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.44))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.12)))
                 }
 
                 Spacer(minLength: 34)
@@ -240,20 +244,22 @@ private struct InsightsShareCard: View {
                     shareDatum(value: showsNumbers ? dayCount(snapshot.longestStreakDays) : "—", label: "LONGEST STREAK")
                 }
                 .padding(.vertical, 24)
-                .background(Color.white.opacity(0.045))
+                .background(Color(red: 0.035, green: 0.050, blue: 0.068).opacity(0.48))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.16)))
 
                 Spacer(minLength: 30)
 
                 HStack {
                     Text("Private by design. Made on this Mac.")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(muted)
+                        .foregroundStyle(pale.opacity(0.88))
+                        .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                     Spacer()
                     Text("muesli.works")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(cyan)
+                        .shadow(color: Color.black.opacity(0.48), radius: 3, y: 1)
                 }
             }
             .padding(54)
@@ -310,8 +316,8 @@ private struct MuesliShareMark: View {
 enum InsightsBrandAssets {
     static let shareBackground = image(
         bundledName: "insights-share-background",
-        extension: "jpg",
-        repositoryPath: "assets/muesli-readme-og.jpg"
+        extension: "png",
+        repositoryPath: "assets/insights-share-background.png"
     )
     static let appIcon = image(
         bundledName: "muesli_app_icon",
