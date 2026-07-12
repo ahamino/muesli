@@ -324,6 +324,26 @@ struct InsightsTests {
         #expect(markerMonths == [6, 7, 8])
     }
 
+    @Test("activity heatmap keeps Sunday through Saturday in one column across locales")
+    func activityHeatmapUsesSundayFirstColumns() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        let sunday = calendar.date(from: DateComponents(year: 2026, month: 6, day: 28))!
+        let activity = (0..<7).map { offset in
+            InsightsDailyActivity(
+                date: calendar.date(byAdding: .day, value: offset, to: sunday)!,
+                words: 0,
+                meetings: 0
+            )
+        }
+
+        let weeks = ActivityHeatmapCalendarLayout.weeks(from: activity, calendar: calendar)
+
+        #expect(weeks.count == 1)
+        #expect(weeks[0].map { calendar.component(.weekday, from: $0.date) } == Array(1...7))
+    }
+
     @Test("word flow layout wraps after the available width and uses the tallest row item")
     func wordFlowLayoutWrapsAndTracksRowHeight() {
         let result = WordFlowLayout(spacing: 10).layout(

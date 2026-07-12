@@ -463,8 +463,9 @@ enum ActivityHeatmapCalendarLayout {
         calendar: Calendar
     ) -> [[InsightsDailyActivity]] {
         Dictionary(grouping: activity) { day -> Date in
-            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: day.date)
-            return calendar.date(from: components) ?? day.date
+            let startOfDay = calendar.startOfDay(for: day.date)
+            let daysSinceSunday = calendar.component(.weekday, from: startOfDay) - 1
+            return calendar.date(byAdding: .day, value: -daysSinceSunday, to: startOfDay) ?? startOfDay
         }
         .sorted { $0.key < $1.key }
         .map { _, days in days.sorted { $0.date < $1.date } }

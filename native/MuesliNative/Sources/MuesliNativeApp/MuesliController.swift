@@ -1856,6 +1856,7 @@ final class MuesliController: NSObject {
         } catch {
             fputs("[muesli-native] dictation backend preparation failed for \(backend.backend)/\(backend.model): \(error)\n", stderr)
             guard selectedBackend == backend else { return false }
+            indicator.hideLoading()
             dictationBackendReadiness = .failed
             return false
         }
