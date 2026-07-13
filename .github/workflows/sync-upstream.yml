@@ -83,6 +83,8 @@ jobs:
                     --title "Sync upstream → personal" --body-file "$BODY")
             PR=$(basename "$URL")
             echo "Opened PR #$PR"
+            GH_TOKEN="$BOT_TOKEN" gh pr comment "$PR" \
+              --body "🤖 Clean merge — **no conflicts**. No manual changes were made; this is a straight merge of $behind upstream commit(s) into \`personal\`." || true
           else
             gh pr edit "$PR" --body-file "$BODY"
             echo "Updated PR #$PR"

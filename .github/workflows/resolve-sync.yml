@@ -147,6 +147,7 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}       # PAT so the PR fires ci.yml + Claude review
+          BOT_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # bot identity for the summary comment
         run: |
           git fetch origin personal "$SYNC_BRANCH" 2>/dev/null || true
 
@@ -169,9 +170,14 @@ jobs:
                     --title "Sync upstream → personal" --body-file "$SUMMARY")
             PR=$(basename "$URL")
             echo "Opened PR #$PR"
+            # Post the resolution as a comment (bot identity) so the changes made
+            # are visible in the conversation timeline, not only the description.
+            GH_TOKEN="$BOT_TOKEN" gh pr comment "$PR" --body-file "$SUMMARY" || true
           else
             gh pr edit "$PR" --body-file "$SUMMARY"
             echo "Updated PR #$PR"
+            GH_TOKEN="$BOT_TOKEN" gh pr comment "$PR" \
+              --body "🤖 Re-ran the resolver and updated \`$SYNC_BRANCH\` — see the refreshed description for what changed." || true
           fi
 
           # claude-code-review.yml reviews this PR as claude[bot] on `pull_request`
