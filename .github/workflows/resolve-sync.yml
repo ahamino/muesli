@@ -48,7 +48,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
+          claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob --verbose'
+          show_full_output: true
           prompt: |
             You are resolving a merge in this fork of Muesli (a macOS Swift app).
 
