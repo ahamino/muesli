@@ -1,0 +1,146 @@
+name: Babysit sync PR
+
+# Watches the sync PR (bot/sync-upstream -> personal) for reviewer feedback and
+# has Claude address BLOCKING comments: it pushes minimal fixes to the branch (via
+# the PAT, so CI + reviews re-run) and resolves the review threads it actually
+# handled. Threads it can't resolve stay open. Because `personal` requires both
+# `ci-gate` AND conversation resolution, the PR auto-merges only once tests pass
+# and every review thread is resolved. Each run's full session is saved as an
+# artifact.
+#
+# Loop shape: reviewer comments -> babysitter fixes + pushes -> CI/reviewers re-run
+# on the new commit -> repeat until nothing blocking remains. A hard cap stops
+# runaway rounds and pings a human.
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: babysit-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  SYNC_BRANCH: bot/sync-upstream
+  MAX_ROUNDS: "5"
+
+jobs:
+  babysit:
+    # Cheap filters first: right event shape, and never react to our own bot's noise.
+    if: >
+      github.actor != 'github-actions' &&
+      github.actor != 'github-actions[bot]' &&
+      (
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null) ||
+        github.event_name == 'pull_request_review' ||
+        github.event_name == 'pull_request_review_comment'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          ref: bot/sync-upstream
+          fetch-depth: 0
+
+      - name: Gate — only the open sync PR, within the round cap
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NUM="${{ github.event.pull_request.number || github.event.issue.number }}"
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+
+          read -r STATE HEAD < <(gh pr view "$NUM" --repo "$GITHUB_REPOSITORY" \
+            --json state,headRefName -q '.state + " " + .headRefName' 2>/dev/null || echo "MISSING x")
+          if [ "$HEAD" != "$SYNC_BRANCH" ] || [ "$STATE" != "OPEN" ]; then
+            echo "Not the open sync PR (head=$HEAD state=$STATE) — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          git fetch origin personal "$SYNC_BRANCH" >/dev/null 2>&1 || true
+          ROUNDS=$(git log "origin/personal..origin/$SYNC_BRANCH" --grep='\[babysitter\]' --oneline | wc -l | tr -d ' ')
+          echo "Babysitter rounds so far: $ROUNDS / $MAX_ROUNDS"
+          if [ "$ROUNDS" -ge "$MAX_ROUNDS" ]; then
+            gh pr comment "$NUM" --repo "$GITHUB_REPOSITORY" \
+              --body "🤖 Babysitter reached its $MAX_ROUNDS-round fix limit on this PR and is standing down — the remaining review feedback needs a human." || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+      - name: Address review feedback with Claude
+        id: claude
+        if: steps.gate.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_bots: "*"   # reviewers (greptile, coderabbit, claude) are bots
+          claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
+          prompt: |
+            You are the review babysitter for PR #${{ steps.gate.outputs.num }}
+            (branch `bot/sync-upstream` → `personal`) in ${{ github.repository }}.
+            A reviewer just left feedback. Address the BLOCKING parts and push fixes.
+
+            Do this:
+            1. git config user.name "github-actions[bot]"
+               git config user.email "github-actions[bot]@users.noreply.github.com"
+            2. Gather all current feedback (you are on the branch already):
+                 - Reviews:  gh pr view ${{ steps.gate.outputs.num }} --repo ${{ github.repository }} --json reviews
+                 - PR comments: gh pr view ${{ steps.gate.outputs.num }} --repo ${{ github.repository }} --json comments
+                 - Unresolved inline threads via GraphQL, capturing each thread's id,
+                   path, and comments:
+                     gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:100){nodes{id isResolved path comments(first:20){nodes{author{login} body}}}}}}}' -F o=${{ github.repository_owner }} -F n=${{ github.event.repository.name }} -F p=${{ steps.gate.outputs.num }}
+               Consider feedback from greptile, coderabbit[bot], claude[bot], and
+               humans. IGNORE anything authored by github-actions[bot] (that's you).
+            3. For each unresolved, genuinely BLOCKING concern (a real bug, a
+               correctness problem, or a valid objection to how the upstream merge
+               conflict was resolved), make the MINIMAL fix in the working tree.
+               Skip pure style nits unless the fix is trivial. Never re-architect or
+               widen scope beyond the reviewers' concerns.
+            4. If you changed anything:
+                 git add -A
+                 git commit -m "[babysitter] address review feedback on PR #${{ steps.gate.outputs.num }}"
+                 git push "https://x-access-token:${SYNC_PAT}@github.com/${{ github.repository }}.git" HEAD:bot/sync-upstream
+               (The `[babysitter]` tag is required — it drives the round cap.)
+            5. For each inline thread you actually addressed, reply and resolve it:
+                 gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<threadId>
+               Only resolve threads you genuinely handled. Leave anything you did not
+               fix UNRESOLVED so it keeps blocking the merge for a human.
+            6. Post ONE summary comment on the PR: what you fixed, and what you
+               deliberately left for a human and why.
+                 gh pr comment ${{ steps.gate.outputs.num }} --repo ${{ github.repository }} --body "..."
+
+            HARD RULES:
+              - Only touch `bot/sync-upstream`. Never push `personal`.
+              - Never resolve a thread you did not actually address.
+              - Keep every change minimal and scoped to the feedback.
+              - If nothing blocking needs fixing, make no commit; just post a short
+                comment saying the outstanding feedback is non-blocking.
+
+      - name: Save babysitter session
+        if: steps.gate.outputs.skip != 'true' && always()
+        run: |
+          SRC="${{ steps.claude.outputs.execution_file }}"
+          [ -n "$SRC" ] && [ -f "$SRC" ] || SRC="$RUNNER_TEMP/claude-execution-output.json"
+          mkdir -p "$RUNNER_TEMP/transcript"
+          [ -f "$SRC" ] && cp "$SRC" "$RUNNER_TEMP/transcript/session.json" || echo "no session" > "$RUNNER_TEMP/transcript/session.json"
+
+      - name: Upload babysitter session
+        if: steps.gate.outputs.skip != 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: babysitter-session-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/transcript/session.json
+          if-no-files-found: warn
+          retention-days: 90
