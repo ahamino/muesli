@@ -60,11 +60,18 @@ final class NotionTarget: ExportTarget {
                 try await throttled { try await NotionClient.updatePageProperties(pageID: existing, properties: properties, token: token) }
                 try await throttled { try await NotionClient.insertPageMarkdown(pageID: existing, markdown: markdown, token: token) }
                 for id in oldChildIDs {
-                    try await throttled { try await NotionClient.deleteBlock(blockID: id, token: token) }
+                    do {
+                        try await throttled { try await NotionClient.deleteBlock(blockID: id, token: token) }
+                    } catch let error as NotionError where error.isNotFound || error.isArchived {
+                        // A single child block already removed/moved in Notion is fine — the goal
+                        // is for it to be gone. Swallow it here so it can't bubble up to the
+                        // page-level recreate path and duplicate a page whose fresh body we just
+                        // inserted (the page itself still exists).
+                    }
                 }
                 return existing
             } catch let error as NotionError where error.isNotFound || error.isArchived {
-                // Deleted/archived in Notion → fall through and recreate it.
+                // The page itself is deleted/archived in Notion → fall through and recreate it.
             }
         }
 
