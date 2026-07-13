@@ -2,7 +2,9 @@ name: Sync from upstream
 
 # Keeps this fork current with Muesli-HQ/muesli:
 #   1. Fast-forwards the fork's pristine `main` to upstream (the "Sync fork" API).
-#   2. Merges the updated `main` into `personal` (your integration branch / default).
+#   2. Brings the updated `main` into `personal` (your integration branch / default):
+#        - Clean merge  -> pushed straight to `personal` and the build is kicked.
+#        - Conflict     -> opens (or reuses) a PR `main -> personal` to resolve by hand.
 # Runs daily and on demand. `main` stays a clean mirror you cut upstream PRs from;
 # `personal` is what CI builds into your app.
 
@@ -13,8 +15,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
   actions: write
-  issues: write
 
 concurrency:
   group: sync-upstream
@@ -42,7 +44,7 @@ jobs:
             echo "merge-upstream returned non-zero (likely already up to date)"
           fi
 
-      - name: Merge updated main into personal
+      - name: Bring main into personal (auto-merge clean, PR on conflict)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -50,26 +52,43 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main personal
 
-          if git merge --no-edit origin/main; then
-            if [ -n "$(git rev-list origin/personal..HEAD)" ]; then
-              git push origin HEAD:personal
-              echo "Merged main into personal and pushed."
-              # GITHUB_TOKEN pushes don't trigger `on: push`, so kick the build explicitly.
-              gh workflow run build-personal.yml --ref personal || true
-            else
-              echo "personal already up to date with main — nothing to push."
-            fi
-          else
-            git merge --abort
-            echo "Conflict merging main into personal — opening an issue for manual resolution."
-            TITLE="Auto-sync: merge conflict main -> personal"
-            EXISTING="$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')"
-            if [ -z "$EXISTING" ]; then
-              BODY="$(mktemp)"
-              cat > "$BODY" <<'EOF'
-          The scheduled upstream sync could not merge `main` into `personal` cleanly.
+          behind=$(git rev-list --count origin/personal..origin/main)
+          if [ "$behind" -eq 0 ]; then
+            echo "personal already contains main — nothing to sync."
+            exit 0
+          fi
+          echo "personal is $behind commit(s) behind main; attempting merge."
 
-          Resolve locally:
+          # Work on a fresh checkout of personal so the merge is against the pushed tip.
+          git checkout -B personal origin/personal
+
+          if git merge --no-edit origin/main; then
+            git push origin HEAD:personal
+            echo "Clean merge — pushed to personal."
+            # GITHUB_TOKEN pushes don't trigger `on: push`, so kick the build explicitly.
+            gh workflow run build-personal.yml --ref personal || true
+            # A prior conflict PR is now obsolete — close it if one is open.
+            PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
+            if [ -n "$PR" ]; then
+              gh pr close "$PR" --comment "Superseded — upstream now merges cleanly and was synced automatically." || true
+            fi
+            exit 0
+          fi
+
+          git merge --abort
+          echo "Conflict merging main into personal — ensuring a sync PR is open."
+          PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
+          if [ -n "$PR" ]; then
+            echo "Sync PR #$PR already open; GitHub keeps its diff current as main advances."
+            exit 0
+          fi
+
+          BODY="$(mktemp)"
+          cat > "$BODY" <<'EOF'
+          Automated daily upstream sync. `main` (the clean upstream mirror) has changes
+          that **conflict** with `personal`, so they need a manual merge.
+
+          Resolve in the GitHub UI (if the conflicts are simple), or locally:
 
           ```
           git checkout personal
@@ -79,10 +98,10 @@ jobs:
           git push origin personal
           ```
 
-          Once pushed, the build workflow runs automatically.
+          Merging this PR — or pushing the resolved merge above — updates `personal`
+          and triggers the build. This PR's diff refreshes automatically on later runs
+          as `main` advances, so a single PR tracks the sync until it's resolved.
           EOF
-              gh issue create --title "$TITLE" --body-file "$BODY"
-            else
-              echo "Conflict issue #$EXISTING already open — not duplicating."
-            fi
-          fi
+          gh pr create --base personal --head main \
+            --title "Sync upstream → personal" \
+            --body-file "$BODY"
