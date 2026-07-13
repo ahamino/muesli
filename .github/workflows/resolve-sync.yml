@@ -50,6 +50,9 @@ jobs:
         with:
           # API key (not the subscription OAuth token) so this never needs a refresh.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # sync-upstream.yml dispatches this workflow as the github-actions bot;
+          # allow that initiator (the action blocks bot-triggered runs by default).
+          allowed_bots: "github-actions"
           claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
           prompt: |
             You are resolving a merge in this fork of Muesli (a macOS Swift app).
