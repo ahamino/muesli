@@ -143,8 +143,7 @@ jobs:
       - name: Open PR, post review, enable auto-merge
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.SYNC_PAT }}       # PAT so the PR fires ci.yml
-          BOT_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # bot identity for the review
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}       # PAT so the PR fires ci.yml + Claude review
         run: |
           git fetch origin personal "$SYNC_BRANCH" 2>/dev/null || true
 
@@ -172,8 +171,8 @@ jobs:
             echo "Updated PR #$PR"
           fi
 
-          # Record the resolution as a review from the github-actions bot.
-          GH_TOKEN="$BOT_TOKEN" gh pr review "$PR" --comment --body-file "$SUMMARY" || true
+          # claude-code-review.yml reviews this PR as claude[bot] on `pull_request`
+          # (the PAT-opened PR fires it); the resolution summary above is the PR body.
 
           # Auto-merge once ci-gate passes (branch protection enforces the test gate).
           gh pr merge "$PR" --auto --merge \
