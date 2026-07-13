@@ -110,6 +110,12 @@ struct SettingsView: View {
         backendOptions(including: appState.selectedBackend)
     }
 
+    private var disabledDictationBackendLabels: Set<String> {
+        guard appState.selectedPostProcessorBackend == .gemma4LiteRT,
+              dictationBackendOptions.contains(.gemma4E2BLiteRT) else { return [] }
+        return [BackendOption.gemma4E2BLiteRT.label]
+    }
+
     private var meetingBackendOptions: [BackendOption] {
         downloadedBackendOptions.filter(\.supportsMeetingTranscription)
     }
@@ -153,7 +159,13 @@ struct SettingsView: View {
     }
 
     private var cleanupBackendOptions: [TranscriptCleanupBackendOption] {
-        TranscriptCleanupBackendOption.available(for: appState.selectedBackend)
+        TranscriptCleanupBackendOption.all
+    }
+
+    private var disabledCleanupBackendLabels: Set<String> {
+        Set(cleanupBackendOptions.lazy
+            .filter { !$0.isCompatible(with: appState.selectedBackend) }
+            .map(\.label))
     }
 
     private var selectedCleanupPromptName: String {
@@ -653,12 +665,16 @@ struct SettingsView: View {
             settingsRow("Dictation model", controlWidth: meetingControlWidth) {
                 settingsMenu(
                     selection: appState.selectedBackend.label,
-                    options: dictationBackendOptions.map(\.label)
+                    options: dictationBackendOptions.map(\.label),
+                    disabledOptions: disabledDictationBackendLabels
                 ) { label in
                     if let option = dictationBackendOptions.first(where: { $0.label == label }) {
                         controller.selectBackend(option)
                     }
                 }
+            }
+            if !disabledDictationBackendLabels.isEmpty {
+                settingsDescription("Gemma 4 dictation is unavailable while Gemma 4 is the cleanup backend.")
             }
             if appState.selectedBackend.backend == BackendOption.cohereTranscribe.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
@@ -767,7 +783,8 @@ struct SettingsView: View {
             ) {
                 settingsMenu(
                     selection: appState.selectedPostProcessorBackend.label,
-                    options: cleanupBackendOptions.map(\.label)
+                    options: cleanupBackendOptions.map(\.label),
+                    disabledOptions: disabledCleanupBackendLabels
                 ) { label in
                     if let option = cleanupBackendOptions.first(where: { $0.label == label }) {
                         controller.selectPostProcessorBackend(option)
@@ -776,6 +793,9 @@ struct SettingsView: View {
             }
             .id(FeatureTourTarget.cloudCleanupSetting.rawValue)
             .featureTourTarget(.cloudCleanupSetting)
+            if !disabledCleanupBackendLabels.isEmpty {
+                settingsDescription("Gemma 4 cleanup is unavailable while Gemma 4 is the dictation model.")
+            }
             if appState.selectedPostProcessorBackend == .local {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
@@ -801,14 +821,17 @@ struct SettingsView: View {
             } else if appState.selectedPostProcessorBackend == .gemma4LiteRT {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
-                    Text(Gemma4LiteRTModelStore.isAvailableLocally() ? "Gemma 4 E2B (Downloaded)" : "Gemma 4 E2B")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(
-                            Gemma4LiteRTModelStore.isAvailableLocally()
-                                ? MuesliTheme.textSecondary
-                                : MuesliTheme.textTertiary
-                        )
+                    if Gemma4LiteRTModelStore.isAvailableLocally() {
+                        Text("Gemma 4 E2B (Downloaded)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .frame(width: meetingControlWidth, alignment: .trailing)
+                    } else {
+                        compactActionButton("View Gemma model", systemImage: "arrow.right") {
+                            controller.showModels(category: .postProcessing)
+                        }
                         .frame(width: meetingControlWidth, alignment: .trailing)
+                    }
                 }
             } else {
                 hostedCleanupSettings(for: appState.selectedPostProcessorBackend)
@@ -2236,8 +2259,18 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func settingsMenu(selection: String, options: [String], onChange: @escaping (String) -> Void) -> some View {
-        FixedWidthPopUp(selection: selection, options: options, onChange: onChange)
+    private func settingsMenu(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onChange: @escaping (String) -> Void
+    ) -> some View {
+        FixedWidthPopUp(
+            selection: selection,
+            options: options,
+            disabledOptions: disabledOptions,
+            onChange: onChange
+        )
             .frame(height: 24)
     }
 
@@ -2987,28 +3020,48 @@ class EditableNSSecureTextField: NSSecureTextField {
 struct FixedWidthPopUp: NSViewRepresentable {
     let selection: String
     let options: [String]
+    let disabledOptions: Set<String>
     /// Reports the selected index, avoiding label collision issues.
     let onSelectionIndex: (Int) -> Void
 
-    init(selection: String, options: [String], onChange: @escaping (String) -> Void) {
+    init(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onChange: @escaping (String) -> Void
+    ) {
         self.selection = selection
         self.options = options
+        self.disabledOptions = disabledOptions
         self.onSelectionIndex = { index in
             guard index >= 0 && index < options.count else { return }
+            guard !disabledOptions.contains(options[index]) else { return }
             onChange(options[index])
         }
     }
 
-    init(selection: String, options: [String], onSelectIndex: @escaping (Int) -> Void) {
+    init(
+        selection: String,
+        options: [String],
+        disabledOptions: Set<String> = [],
+        onSelectIndex: @escaping (Int) -> Void
+    ) {
         self.selection = selection
         self.options = options
-        self.onSelectionIndex = onSelectIndex
+        self.disabledOptions = disabledOptions
+        self.onSelectionIndex = { index in
+            guard index >= 0 && index < options.count else { return }
+            guard !disabledOptions.contains(options[index]) else { return }
+            onSelectIndex(index)
+        }
     }
 
     func makeNSView(context: Context) -> NSPopUpButton {
         let button = NSPopUpButton(frame: .zero, pullsDown: false)
         button.removeAllItems()
         button.addItems(withTitles: options)
+        button.menu?.autoenablesItems = false
+        updateEnabledItems(in: button)
         button.selectItem(withTitle: selection)
         button.target = context.coordinator
         button.action = #selector(Coordinator.selectionChanged(_:))
@@ -3023,10 +3076,17 @@ struct FixedWidthPopUp: NSViewRepresentable {
             button.removeAllItems()
             button.addItems(withTitles: options)
         }
+        updateEnabledItems(in: button)
         if button.titleOfSelectedItem != selection {
             button.selectItem(withTitle: selection)
         }
         context.coordinator.onSelectionIndex = onSelectionIndex
+    }
+
+    private func updateEnabledItems(in button: NSPopUpButton) {
+        for item in button.itemArray {
+            item.isEnabled = !disabledOptions.contains(item.title)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(onSelectionIndex: onSelectionIndex) }

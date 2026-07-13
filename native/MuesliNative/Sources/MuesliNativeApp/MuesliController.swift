@@ -2163,7 +2163,7 @@ final class MuesliController: NSObject {
         if enabled, selectedPostProcessorBackend == .gemma4LiteRT,
            !Gemma4LiteRTModelStore.isAvailableLocally() {
             updateConfig { $0.enablePostProcessor = false }
-            showModels(category: .dictation)
+            showModels(category: .postProcessing)
             return
         }
         updateConfig { $0.enablePostProcessor = enabled }
@@ -2218,7 +2218,7 @@ final class MuesliController: NSObject {
         if option == .gemma4LiteRT, config.enablePostProcessor,
            !Gemma4LiteRTModelStore.isAvailableLocally() {
             updateConfig { $0.enablePostProcessor = false }
-            showModels(category: .dictation)
+            showModels(category: .postProcessing)
             return
         }
         preloadExperimentalTranscriptionFeatures()

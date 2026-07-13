@@ -437,7 +437,17 @@ struct ModelsView: View {
             if showExperimental {
                 VStack(spacing: MuesliTheme.spacing12) {
                     ForEach(BackendOption.experimental, id: \.model) { option in
-                        modelCard(option: option, logo: logoForBackend(option))
+                        if option == .gemma4E2BLiteRT,
+                           appState.selectedPostProcessorBackend == .gemma4LiteRT {
+                            modelCard(
+                                option: option,
+                                logo: logoForBackend(option),
+                                downloadedLabel: "Used for Cleanup",
+                                activationDisabledReason: "Unavailable while Gemma 4 is selected for cleanup. Choose another cleanup backend first."
+                            )
+                        } else {
+                            modelCard(option: option, logo: logoForBackend(option))
+                        }
                     }
                 }
             }
@@ -492,11 +502,36 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             VStack(spacing: MuesliTheme.spacing12) {
+                gemmaCleanupModelCard
+
                 ForEach(PostProcessorOption.all) { option in
                     postProcModelCard(option)
                 }
             }
         }
+    }
+
+    private var gemmaCleanupModelCard: some View {
+        let option = BackendOption.gemma4E2BLiteRT
+        let isDownloaded = downloadedModels.contains(option.model)
+        let isCompatible = TranscriptCleanupBackendOption.gemma4LiteRT
+            .isCompatible(with: appState.selectedBackend)
+
+        return modelCard(
+            option: option,
+            logo: "google-logo",
+            isActive: isDownloaded && appState.selectedPostProcessorBackend == .gemma4LiteRT,
+            onSetActive: {
+                controller.selectPostProcessorBackend(.gemma4LiteRT)
+            },
+            description: "On-device Gemma cleanup for filler removal, formatting, and transcript correction. Shares one download with the experimental Gemma dictation backend.",
+            activeLabel: "Cleanup Active",
+            downloadedLabel: isCompatible ? "Downloaded" : "Used for Dictation",
+            actionTitle: "Use for Cleanup",
+            activationDisabledReason: isCompatible
+                ? nil
+                : "Unavailable while Gemma 4 is selected for dictation. Choose another dictation model first."
+        )
     }
 
     private func postProcModelCard(_ option: PostProcessorOption) -> some View {
@@ -756,6 +791,8 @@ struct ModelsView: View {
         isActive: Bool,
         isDownloaded: Bool,
         isDownloading: Bool,
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil,
         onSetActive: (() -> Void)? = nil
     ) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
@@ -772,7 +809,7 @@ struct ModelsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             } else if isDownloaded {
                 if !isActive {
-                    Button("Set Active") {
+                    Button(actionTitle) {
                         if let onSetActive {
                             onSetActive()
                         } else {
@@ -781,11 +818,13 @@ struct ModelsView: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.accent)
+                    .foregroundStyle(activationDisabledReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
-                    .background(MuesliTheme.accentSubtle)
+                    .background(activationDisabledReason == nil ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .disabled(activationDisabledReason != nil)
+                    .help(activationDisabledReason ?? actionTitle)
                 }
 
                 Button {
@@ -816,7 +855,12 @@ struct ModelsView: View {
         option: BackendOption,
         logo: String? = nil,
         isActive activeOverride: Bool? = nil,
-        onSetActive: (() -> Void)? = nil
+        onSetActive: (() -> Void)? = nil,
+        description: String? = nil,
+        activeLabel: String = "Active",
+        downloadedLabel: String = "Downloaded",
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil
     ) -> some View {
         let isActive = activeOverride ?? (appState.selectedBackend == option)
         let isDownloaded = downloadedModels.contains(option.model)
@@ -847,7 +891,7 @@ struct ModelsView: View {
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
 
-                    Text(option.description)
+                    Text(description ?? option.description)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
@@ -856,7 +900,7 @@ struct ModelsView: View {
 
                 // Status badge
                 if isActive {
-                    Text("Active")
+                    Text(activeLabel)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.success)
                         .padding(.horizontal, 8)
@@ -864,7 +908,7 @@ struct ModelsView: View {
                         .background(MuesliTheme.success.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 } else if isDownloaded {
-                    Text("Downloaded")
+                    Text(downloadedLabel)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .padding(.horizontal, 8)
@@ -954,11 +998,19 @@ struct ModelsView: View {
                 }
             }
 
+            if let activationDisabledReason, isDownloaded, !isActive {
+                Label(activationDisabledReason, systemImage: "exclamationmark.lock")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
             actionButtons(
                 for: option,
                 isActive: isActive,
                 isDownloaded: isDownloaded,
                 isDownloading: isDownloading,
+                actionTitle: actionTitle,
+                activationDisabledReason: activationDisabledReason,
                 onSetActive: onSetActive
             )
         }
