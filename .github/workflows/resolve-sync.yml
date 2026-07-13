@@ -1,0 +1,148 @@
+name: Resolve upstream sync
+
+# The "babysitter": when the daily sync (sync-upstream.yml) can't merge upstream
+# `main` into `personal` cleanly, it hands off here. Claude merges origin/main into
+# personal, resolves the conflicts (keeping both upstream changes and this fork's
+# customizations), and pushes personal — fully hands-off. build-personal then
+# validates on macOS. If Claude can't resolve confidently it aborts without pushing
+# and we open a fallback PR so a human is aware.
+#
+# Runs on demand and when dispatched by sync-upstream.yml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  actions: write
+
+concurrency:
+  group: resolve-sync
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout personal (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: personal
+          fetch-depth: 0
+
+      - name: Refresh fork main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Idempotent: keeps main current if this workflow is run on its own.
+          gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main || true
+          git fetch origin main personal
+
+      - name: Record personal tip
+        id: before
+        run: echo "sha=$(git rev-parse origin/personal)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the merge with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
+          prompt: |
+            You are resolving a merge in this fork of Muesli (a macOS Swift app).
+
+            GOAL: bring the latest upstream on `origin/main` into the `personal`
+            branch, resolve all conflicts, and push `personal`.
+
+            Do exactly this:
+            1. git config user.name "github-actions[bot]"
+               git config user.email "github-actions[bot]@users.noreply.github.com"
+            2. git fetch origin main personal
+               git checkout -B personal origin/personal
+            3. git merge --no-edit origin/main
+            4. If it merged cleanly, go to step 7.
+            5. Resolve EVERY conflicted file. Preserve BOTH sides' intent:
+                 - Keep upstream's new features and fixes from origin/main.
+                 - Keep this fork's customizations that live on `personal`: Notion
+                   sync, prosody/affect notes, group-diarization work, and the fork
+                   automation workflows (.github/workflows/sync-upstream.yml,
+                   build-personal.yml, resolve-sync.yml — these exist ONLY on the
+                   fork, so always keep them; never delete them to match upstream).
+                 - When a hunk is a genuine either/or and you are not confident,
+                   prefer the `personal` side and note it in the commit body.
+               Read enough surrounding code to merge intelligently — do not just
+               pick one side blindly. After fixing a file, `git add` it.
+            6. Confirm nothing is left unresolved:
+                 git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- . ':!*.md'
+               must print nothing (markdown docs may legitimately contain `=======`
+               rules, so they are excluded from this check). If real conflict
+               markers remain in code, keep resolving.
+            7. If a merge is in progress, git commit --no-edit (append a short note
+               on any low-confidence choices). Then: git push origin HEAD:personal
+            8. Print a one-paragraph summary: which files conflicted and how you
+               resolved each.
+
+            HARD RULES:
+              - Never force-push. Never touch any branch other than `personal`.
+              - Do NOT edit source code beyond what the conflict resolution requires.
+              - If you cannot resolve confidently, run `git merge --abort`, do NOT
+                push, and say so plainly in your summary. A later step will open a
+                PR for a human.
+
+      - name: Kick build or open fallback PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin main personal
+          after=$(git rev-parse origin/personal)
+          before="${{ steps.before.outputs.sha }}"
+
+          if [ "$after" != "$before" ]; then
+            echo "personal advanced ($before -> $after) — Claude pushed the resolved merge."
+            # GITHUB_TOKEN pushes don't fire `on: push`, so kick the build explicitly.
+            gh workflow run build-personal.yml --ref personal || true
+            # Close any stale sync PR now that personal contains main.
+            PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
+            if [ -n "$PR" ]; then
+              gh pr close "$PR" --comment "Resolved automatically by the sync bot and pushed to personal." || true
+            fi
+            exit 0
+          fi
+
+          # Only escalate if personal is genuinely still behind main.
+          behind=$(git rev-list --count origin/personal..origin/main)
+          if [ "$behind" -eq 0 ]; then
+            echo "personal already contains main — nothing to do."
+            exit 0
+          fi
+
+          echo "Claude did not push a resolution — opening a fallback PR for a human."
+          PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
+          if [ -n "$PR" ]; then
+            echo "Sync PR #$PR already open."
+            exit 0
+          fi
+          BODY="$(mktemp)"
+          cat > "$BODY" <<'EOF'
+          The automated resolver could not merge `main` into `personal` confidently,
+          so it left it for a human.
+
+          Resolve locally:
+
+          ```
+          git checkout personal
+          git fetch origin
+          git merge origin/main
+          # resolve conflicts, then:
+          git push origin personal
+          ```
+
+          See the latest **Resolve upstream sync** run in the Actions tab for Claude's
+          notes on what it attempted. Merging/pushing updates `personal` and triggers
+          the build.
+          EOF
+          gh pr create --base personal --head main \
+            --title "Sync upstream → personal (needs manual resolution)" \
+            --body-file "$BODY"

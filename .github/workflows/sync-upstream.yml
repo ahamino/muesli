@@ -76,32 +76,7 @@ jobs:
           fi
 
           git merge --abort
-          echo "Conflict merging main into personal — ensuring a sync PR is open."
-          PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
-          if [ -n "$PR" ]; then
-            echo "Sync PR #$PR already open; GitHub keeps its diff current as main advances."
-            exit 0
-          fi
-
-          BODY="$(mktemp)"
-          cat > "$BODY" <<'EOF'
-          Automated daily upstream sync. `main` (the clean upstream mirror) has changes
-          that **conflict** with `personal`, so they need a manual merge.
-
-          Resolve in the GitHub UI (if the conflicts are simple), or locally:
-
-          ```
-          git checkout personal
-          git fetch origin
-          git merge origin/main
-          # resolve conflicts, then:
-          git push origin personal
-          ```
-
-          Merging this PR — or pushing the resolved merge above — updates `personal`
-          and triggers the build. This PR's diff refreshes automatically on later runs
-          as `main` advances, so a single PR tracks the sync until it's resolved.
-          EOF
-          gh pr create --base personal --head main \
-            --title "Sync upstream → personal" \
-            --body-file "$BODY"
+          echo "Conflict merging main into personal — handing off to the resolver agent."
+          # resolve-sync.yml runs Claude to resolve the conflicts and push personal.
+          # If Claude can't resolve confidently, it opens a fallback PR for a human.
+          gh workflow run resolve-sync.yml --ref personal || true
