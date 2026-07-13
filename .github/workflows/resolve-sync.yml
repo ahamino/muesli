@@ -45,9 +45,12 @@ jobs:
         run: echo "sha=$(git rev-parse origin/personal)" >> "$GITHUB_OUTPUT"
 
       - name: Resolve the merge with Claude
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # API key (not the subscription OAuth token) so this never needs a
+          # periodic refresh — it stays valid until you rotate it in the Console.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
           prompt: |
             You are resolving a merge in this fork of Muesli (a macOS Swift app).
@@ -89,6 +92,56 @@ jobs:
               - If you cannot resolve confidently, run `git merge --abort`, do NOT
                 push, and say so plainly in your summary. A later step will open a
                 PR for a human.
+
+      - name: Capture the resolver session
+        if: always()
+        run: |
+          # claude-code-action writes the full session (every assistant message and
+          # tool call) to an execution-log JSON. Stash it and render a digest into
+          # this run's Summary tab so you can see what the agent did, every run.
+          SRC="${{ steps.claude.outputs.execution_file }}"
+          [ -n "$SRC" ] && [ -f "$SRC" ] || SRC="$RUNNER_TEMP/claude-execution-output.json"
+          mkdir -p "$RUNNER_TEMP/transcript"
+
+          if [ ! -f "$SRC" ]; then
+            echo "No session log found (Claude step may not have run)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cp "$SRC" "$RUNNER_TEMP/transcript/session.json"
+
+          # Normalize to a stream of events whether the file is a JSON array or JSONL.
+          if jq -e 'type=="array"' "$SRC" >/dev/null 2>&1; then
+            EVENTS() { jq -c '.[]' "$SRC"; }
+          else
+            EVENTS() { jq -c '.' "$SRC" 2>/dev/null; }
+          fi
+
+          {
+            echo "## 🧩 Conflict resolver session"
+            echo ""
+            echo "### Final result"
+            echo '```'
+            EVENTS | jq -r 'select(.type=="result") | (.result // .subtype // "n/a")' 2>/dev/null | head -60
+            echo '```'
+            echo ""
+            echo "### What the agent did (tool calls, in order)"
+            echo '```'
+            EVENTS | jq -r 'select(.type=="assistant") | .message.content[]?
+              | select(.type=="tool_use")
+              | "• \(.name): \(.input.command // .input.file_path // (.input | tostring) | .[0:300])"' 2>/dev/null | head -300
+            echo '```'
+            echo ""
+            echo "_Full session (all messages + tool inputs/outputs) is attached to this run as the **resolver-session** artifact._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the full resolver session
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-session-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/transcript/session.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Kick build or open fallback PR
         if: always()
