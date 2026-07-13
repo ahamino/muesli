@@ -1408,7 +1408,7 @@ struct ModelsView: View {
             selectedWhisperModel = active.model
         }
         if BackendOption.experimental.contains(active) {
-            return
+            showExperimental = true
         }
     }
 

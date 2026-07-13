@@ -10,7 +10,13 @@ struct MarketingVersion: Comparable, Equatable {
               parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else {
             return nil
         }
-        components = parts.compactMap { Int($0) }
+        var parsedComponents: [Int] = []
+        parsedComponents.reserveCapacity(parts.count)
+        for part in parts {
+            guard let component = Int(part) else { return nil }
+            parsedComponents.append(component)
+        }
+        components = parsedComponents
     }
 
     static func == (lhs: MarketingVersion, rhs: MarketingVersion) -> Bool {
@@ -48,6 +54,11 @@ struct FeatureTourStep: Identifiable, Equatable {
 struct FeatureTour: Equatable {
     let version: String
     let steps: [FeatureTourStep]
+
+    var displayVersion: String {
+        guard let marketingVersion = MarketingVersion(version) else { return version }
+        return marketingVersion.components.prefix(2).map(String.init).joined(separator: ".")
+    }
 }
 
 enum FeatureTourCatalog {

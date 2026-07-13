@@ -12,6 +12,62 @@ struct FeatureTourTests {
         #expect(try #require(MarketingVersion("0.8")) == #require(MarketingVersion("0.8.0")))
         #expect(try #require(MarketingVersion("0.8.0-preprod.1")) == #require(MarketingVersion("0.8.0")))
         #expect(MarketingVersion("not-a-version") == nil)
+        #expect(MarketingVersion("999999999999999999999999.0") == nil)
+        #expect(tour.displayVersion == "0.8")
+    }
+
+    @Test("target frame tracking ignores subpixel layout churn")
+    func frameTrackingTolerance() {
+        let current: [FeatureTourTarget: CGRect] = [
+            .insightsEntry: CGRect(x: 20, y: 30, width: 200, height: 80)
+        ]
+        #expect(!FeatureTourFrameTracking.hasMeaningfulChange(
+            from: current,
+            to: [.insightsEntry: CGRect(x: 20.25, y: 30.25, width: 200, height: 80)]
+        ))
+        #expect(FeatureTourFrameTracking.hasMeaningfulChange(
+            from: current,
+            to: [.insightsEntry: CGRect(x: 21, y: 30, width: 200, height: 80)]
+        ))
+        #expect(FeatureTourFrameTracking.hasMeaningfulChange(
+            from: current,
+            to: [.meetingsSidebar: CGRect(x: 20, y: 30, width: 200, height: 80)]
+        ))
+    }
+
+    @Test("callout layout uses rendered height and falls back to a visible edge")
+    func calloutLayout() {
+        let container = CGSize(width: 900, height: 600)
+        let callout = CGSize(width: 380, height: 310)
+        let bottomTarget = CGRect(x: 280, y: 500, width: 220, height: 50)
+
+        let bottomPosition = FeatureTourCalloutLayout.position(
+            spotlight: bottomTarget,
+            containerSize: container,
+            calloutSize: callout,
+            target: .liveCaptionsSetting
+        )
+        #expect(bottomPosition.y < bottomTarget.minY)
+
+        let topTarget = CGRect(x: 280, y: 30, width: 220, height: 50)
+        let abovePreferred = FeatureTourCalloutLayout.position(
+            spotlight: topTarget,
+            containerSize: container,
+            calloutSize: callout,
+            target: .experimentalModels
+        )
+        #expect(abovePreferred.y > topTarget.maxY)
+
+        let calloutFrame = CGRect(
+            x: abovePreferred.x - callout.width / 2,
+            y: abovePreferred.y - callout.height / 2,
+            width: callout.width,
+            height: callout.height
+        )
+        #expect(calloutFrame.minX >= 20)
+        #expect(calloutFrame.maxX <= container.width - 20)
+        #expect(calloutFrame.minY >= 20)
+        #expect(calloutFrame.maxY <= container.height - 20)
     }
 
     @Test("existing users without legacy version markers see the first feature tour")

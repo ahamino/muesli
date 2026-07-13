@@ -11,6 +11,147 @@ struct FeatureTourTargetPreferenceKey: PreferenceKey {
     }
 }
 
+struct FeatureTourFrameTracking {
+    static func hasMeaningfulChange(
+        from current: [FeatureTourTarget: CGRect],
+        to updated: [FeatureTourTarget: CGRect],
+        tolerance: CGFloat = 0.5
+    ) -> Bool {
+        guard Set(current.keys) == Set(updated.keys) else { return true }
+        return updated.contains { target, rect in
+            guard let existing = current[target] else { return true }
+            return abs(existing.minX - rect.minX) > tolerance
+                || abs(existing.minY - rect.minY) > tolerance
+                || abs(existing.width - rect.width) > tolerance
+                || abs(existing.height - rect.height) > tolerance
+        }
+    }
+}
+
+private struct FeatureTourCalloutSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > 0, next.height > 0 {
+            value = next
+        }
+    }
+}
+
+private enum FeatureTourCalloutEdge {
+    case above
+    case below
+    case leading
+    case trailing
+}
+
+struct FeatureTourCalloutLayout {
+    static func position(
+        spotlight: CGRect,
+        containerSize: CGSize,
+        calloutSize: CGSize,
+        target: FeatureTourTarget,
+        margin: CGFloat = 20,
+        gap: CGFloat = 24
+    ) -> CGPoint {
+        let bounds = CGRect(
+            x: margin,
+            y: margin,
+            width: max(0, containerSize.width - margin * 2),
+            height: max(0, containerSize.height - margin * 2)
+        )
+        let candidates = preferredEdges(for: target).map {
+            center(for: $0, spotlight: spotlight, calloutSize: calloutSize, gap: gap)
+        }
+
+        if let fitting = candidates.first(where: {
+            bounds.contains(frame(centeredAt: $0, size: calloutSize))
+        }) {
+            return fitting
+        }
+
+        let clamped = candidates.map {
+            clamp($0, calloutSize: calloutSize, to: bounds)
+        }
+        return clamped.min { lhs, rhs in
+            overlapArea(frame(centeredAt: lhs, size: calloutSize), spotlight)
+                < overlapArea(frame(centeredAt: rhs, size: calloutSize), spotlight)
+        } ?? CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+    }
+
+    private static func preferredEdges(for target: FeatureTourTarget) -> [FeatureTourCalloutEdge] {
+        switch target {
+        case .meetingsSidebar:
+            return [.trailing, .leading, .below, .above]
+        case .insightsEntry, .liveCaptionsSetting:
+            return [.below, .above, .trailing, .leading]
+        case .cloudCleanupSetting, .experimentalModels:
+            return [.above, .below, .trailing, .leading]
+        }
+    }
+
+    private static func center(
+        for edge: FeatureTourCalloutEdge,
+        spotlight: CGRect,
+        calloutSize: CGSize,
+        gap: CGFloat
+    ) -> CGPoint {
+        switch edge {
+        case .above:
+            return CGPoint(x: spotlight.midX, y: spotlight.minY - gap - calloutSize.height / 2)
+        case .below:
+            return CGPoint(x: spotlight.midX, y: spotlight.maxY + gap + calloutSize.height / 2)
+        case .leading:
+            return CGPoint(x: spotlight.minX - gap - calloutSize.width / 2, y: spotlight.midY)
+        case .trailing:
+            return CGPoint(x: spotlight.maxX + gap + calloutSize.width / 2, y: spotlight.midY)
+        }
+    }
+
+    private static func frame(centeredAt center: CGPoint, size: CGSize) -> CGRect {
+        CGRect(
+            x: center.x - size.width / 2,
+            y: center.y - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func clamp(_ center: CGPoint, calloutSize: CGSize, to bounds: CGRect) -> CGPoint {
+        CGPoint(
+            x: clampedCoordinate(
+                center.x,
+                lower: bounds.minX + calloutSize.width / 2,
+                upper: bounds.maxX - calloutSize.width / 2,
+                fallback: bounds.midX
+            ),
+            y: clampedCoordinate(
+                center.y,
+                lower: bounds.minY + calloutSize.height / 2,
+                upper: bounds.maxY - calloutSize.height / 2,
+                fallback: bounds.midY
+            )
+        )
+    }
+
+    private static func clampedCoordinate(
+        _ value: CGFloat,
+        lower: CGFloat,
+        upper: CGFloat,
+        fallback: CGFloat
+    ) -> CGFloat {
+        guard lower <= upper else { return fallback }
+        return min(max(value, lower), upper)
+    }
+
+    private static func overlapArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull else { return 0 }
+        return intersection.width * intersection.height
+    }
+}
+
 extension View {
     @ViewBuilder
     func featureTourTarget(_ target: FeatureTourTarget?) -> some View {
@@ -41,6 +182,7 @@ struct FeatureTourOverlay: View {
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var calloutSize: CGSize = .zero
 
     private var step: FeatureTourStep {
         tour.steps[stepIndex]
@@ -71,9 +213,23 @@ struct FeatureTourOverlay: View {
 
             callout
                 .frame(width: 380)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: FeatureTourCalloutSizePreferenceKey.self,
+                            value: proxy.size
+                        )
+                    }
+                }
+                .opacity(calloutSize == .zero ? 0 : 1)
                 .position(calloutPosition)
         }
         .frame(width: containerSize.width, height: containerSize.height)
+        .onPreferenceChange(FeatureTourCalloutSizePreferenceKey.self) { size in
+            guard abs(size.width - calloutSize.width) > 0.5
+                    || abs(size.height - calloutSize.height) > 0.5 else { return }
+            calloutSize = size
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: step.id)
         .accessibilityElement(children: .contain)
     }
@@ -150,28 +306,11 @@ struct FeatureTourOverlay: View {
     }
 
     private var calloutPosition: CGPoint {
-        let calloutWidth: CGFloat = 380
-        let calloutHeight: CGFloat = 230
-        let margin: CGFloat = 20
-        let gap: CGFloat = 24
-
-        let proposedX: CGFloat
-        let proposedY: CGFloat
-        switch step.target {
-        case .meetingsSidebar:
-            proposedX = expandedSpotlight.maxX + gap + calloutWidth / 2
-            proposedY = expandedSpotlight.midY
-        case .insightsEntry, .liveCaptionsSetting:
-            proposedX = expandedSpotlight.midX
-            proposedY = expandedSpotlight.maxY + gap + calloutHeight / 2
-        case .cloudCleanupSetting, .experimentalModels:
-            proposedX = expandedSpotlight.midX
-            proposedY = expandedSpotlight.minY - gap - calloutHeight / 2
-        }
-
-        return CGPoint(
-            x: min(max(proposedX, margin + calloutWidth / 2), containerSize.width - margin - calloutWidth / 2),
-            y: min(max(proposedY, margin + calloutHeight / 2), containerSize.height - margin - calloutHeight / 2)
+        FeatureTourCalloutLayout.position(
+            spotlight: expandedSpotlight,
+            containerSize: containerSize,
+            calloutSize: calloutSize,
+            target: step.target
         )
     }
 }
@@ -194,7 +333,7 @@ struct FeatureTourInvitationView: View {
                         .frame(width: 26, height: 26)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("MUESLI 0.8")
+                        Text("MUESLI \(tour.displayVersion)")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(MuesliTheme.accent)
                         Text("Want a quick tour of what’s new?")

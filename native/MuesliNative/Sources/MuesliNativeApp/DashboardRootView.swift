@@ -19,6 +19,10 @@ struct DashboardRootView: View {
         .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(appState.config.darkMode ? .dark : .light)
         .onPreferenceChange(FeatureTourTargetPreferenceKey.self) { frames in
+            guard FeatureTourFrameTracking.hasMeaningfulChange(
+                from: featureTourTargetFrames,
+                to: frames
+            ) else { return }
             featureTourTargetFrames = frames
         }
         .overlay {

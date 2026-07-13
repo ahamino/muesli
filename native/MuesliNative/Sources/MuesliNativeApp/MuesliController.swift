@@ -2157,6 +2157,7 @@ final class MuesliController: NSObject {
         if enabled, selectedPostProcessorBackend == .local {
             guard normalizePostProcessorSelectionForAvailability() != nil else {
                 updateConfig { $0.enablePostProcessor = false }
+                showModels(category: .postProcessing)
                 return
             }
         }
@@ -2212,6 +2213,7 @@ final class MuesliController: NSObject {
         if option == .local, config.enablePostProcessor {
             guard normalizePostProcessorSelectionForAvailability() != nil else {
                 updateConfig { $0.enablePostProcessor = false }
+                showModels(category: .postProcessing)
                 return
             }
         }
