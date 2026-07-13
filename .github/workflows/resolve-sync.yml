@@ -2,10 +2,12 @@ name: Resolve upstream sync
 
 # The "babysitter": when the daily sync (sync-upstream.yml) can't merge upstream
 # `main` into `personal` cleanly, it hands off here. Claude merges origin/main into
-# personal, resolves the conflicts (keeping both upstream changes and this fork's
-# customizations), and pushes personal — fully hands-off. build-personal then
-# validates on macOS. If Claude can't resolve confidently it aborts without pushing
-# and we open a fallback PR so a human is aware.
+# the `bot/sync-upstream` branch, resolves the conflicts (keeping both upstream
+# changes and this fork's customizations), and pushes THAT branch — never `personal`
+# directly. A PR into `personal` is then opened/updated with the resolution summary,
+# a bot review comment, and auto-merge enabled. Branch protection makes CI (`ci-gate`)
+# a required check, so the PR only merges once tests pass. Every run's full agent
+# session is saved as an artifact.
 #
 # Runs on demand and when dispatched by sync-upstream.yml.
 
@@ -15,12 +17,15 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
   actions: write
+  id-token: write
 
 concurrency:
   group: resolve-sync
   cancel-in-progress: false
+
+env:
+  SYNC_BRANCH: bot/sync-upstream
 
 jobs:
   resolve:
@@ -36,33 +41,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Idempotent: keeps main current if this workflow is run on its own.
           gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main || true
           git fetch origin main personal
-
-      - name: Record personal tip
-        id: before
-        run: echo "sha=$(git rev-parse origin/personal)" >> "$GITHUB_OUTPUT"
 
       - name: Resolve the merge with Claude
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          # API key (not the subscription OAuth token) so this never needs a
-          # periodic refresh — it stays valid until you rotate it in the Console.
+          # API key (not the subscription OAuth token) so this never needs a refresh.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: '--allowed-tools Bash,Edit,Read,Write,Grep,Glob'
           prompt: |
             You are resolving a merge in this fork of Muesli (a macOS Swift app).
 
-            GOAL: bring the latest upstream on `origin/main` into the `personal`
-            branch, resolve all conflicts, and push `personal`.
+            GOAL: produce a branch `bot/sync-upstream` equal to `personal` with the
+            latest `origin/main` merged in and ALL conflicts resolved, and push it.
+            Do NOT push `personal`.
 
             Do exactly this:
             1. git config user.name "github-actions[bot]"
                git config user.email "github-actions[bot]@users.noreply.github.com"
             2. git fetch origin main personal
-               git checkout -B personal origin/personal
+               git checkout -B bot/sync-upstream origin/personal
             3. git merge --no-edit origin/main
             4. If it merged cleanly, go to step 7.
             5. Resolve EVERY conflicted file. Preserve BOTH sides' intent:
@@ -74,65 +74,62 @@ jobs:
                    fork, so always keep them; never delete them to match upstream).
                  - When a hunk is a genuine either/or and you are not confident,
                    prefer the `personal` side and note it in the commit body.
-               Read enough surrounding code to merge intelligently — do not just
-               pick one side blindly. After fixing a file, `git add` it.
+               Read enough surrounding code to merge intelligently. After fixing a
+               file, `git add` it.
             6. Confirm nothing is left unresolved:
                  git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- . ':!*.md'
-               must print nothing (markdown docs may legitimately contain `=======`
-               rules, so they are excluded from this check). If real conflict
-               markers remain in code, keep resolving.
+               must print nothing. If real conflict markers remain, keep resolving.
             7. If a merge is in progress, git commit --no-edit (append a short note
-               on any low-confidence choices). Then: git push origin HEAD:personal
+               on any low-confidence choices). Then:
+                 git push --force-with-lease origin HEAD:bot/sync-upstream
             8. Print a one-paragraph summary: which files conflicted and how you
-               resolved each.
+               resolved each. This becomes the PR description — make it clear.
 
             HARD RULES:
-              - Never force-push. Never touch any branch other than `personal`.
-              - Do NOT edit source code beyond what the conflict resolution requires.
+              - Never push `personal` or any branch other than `bot/sync-upstream`.
+              - Do NOT edit source beyond what the conflict resolution requires.
               - If you cannot resolve confidently, run `git merge --abort`, do NOT
-                push, and say so plainly in your summary. A later step will open a
-                PR for a human.
+                push, and say so plainly in your summary.
 
       - name: Capture the resolver session
         if: always()
+        id: session
         run: |
           # claude-code-action writes the full session (every assistant message and
-          # tool call) to an execution-log JSON. Stash it and render a digest into
-          # this run's Summary tab so you can see what the agent did, every run.
+          # tool call) to an execution-log JSON. Stash it, and build a Markdown
+          # summary reused for the PR body, the PR review, and this run's Summary tab.
           SRC="${{ steps.claude.outputs.execution_file }}"
           [ -n "$SRC" ] && [ -f "$SRC" ] || SRC="$RUNNER_TEMP/claude-execution-output.json"
           mkdir -p "$RUNNER_TEMP/transcript"
+          SUMMARY="$RUNNER_TEMP/summary.md"
+          echo "path=$SUMMARY" >> "$GITHUB_OUTPUT"
 
           if [ ! -f "$SRC" ]; then
-            echo "No session log found (Claude step may not have run)." >> "$GITHUB_STEP_SUMMARY"
+            echo "No agent session log was produced (the Claude step may not have run)." > "$SUMMARY"
+            cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           cp "$SRC" "$RUNNER_TEMP/transcript/session.json"
 
-          # Normalize to a stream of events whether the file is a JSON array or JSONL.
-          if jq -e 'type=="array"' "$SRC" >/dev/null 2>&1; then
-            EVENTS() { jq -c '.[]' "$SRC"; }
-          else
-            EVENTS() { jq -c '.' "$SRC" 2>/dev/null; }
-          fi
+          if jq -e 'type=="array"' "$SRC" >/dev/null 2>&1; then EV='.[]'; else EV='.'; fi
+          RESULT=$(jq -r "$EV | select(.type==\"result\") | (.result // .subtype // \"n/a\")" "$SRC" 2>/dev/null | head -c 60000)
 
           {
-            echo "## 🧩 Conflict resolver session"
+            echo "### 🤖 Automated conflict resolution"
             echo ""
-            echo "### Final result"
-            echo '```'
-            EVENTS | jq -r 'select(.type=="result") | (.result // .subtype // "n/a")' 2>/dev/null | head -60
-            echo '```'
+            echo "${RESULT:-_(no summary emitted)_}"
             echo ""
-            echo "### What the agent did (tool calls, in order)"
-            echo '```'
-            EVENTS | jq -r 'select(.type=="assistant") | .message.content[]?
-              | select(.type=="tool_use")
-              | "• \(.name): \(.input.command // .input.file_path // (.input | tostring) | .[0:300])"' 2>/dev/null | head -300
-            echo '```'
+            echo "<details><summary>What the agent ran (tool calls, in order)</summary>"
             echo ""
-            echo "_Full session (all messages + tool inputs/outputs) is attached to this run as the **resolver-session** artifact._"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo '```'
+            jq -r "$EV | select(.type==\"assistant\") | .message.content[]? | select(.type==\"tool_use\") | \"• \(.name): \(.input.command // .input.file_path // (.input|tostring) | .[0:200])\"" "$SRC" 2>/dev/null | head -200
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "_Full session (all messages + tool I/O) is attached to the resolver run as the **resolver-session** artifact._"
+          } > "$SUMMARY"
+
+          cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the full resolver session
         if: always()
@@ -143,59 +140,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Kick build or open fallback PR
+      - name: Open PR, post review, enable auto-merge
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}       # PAT so the PR fires ci.yml
+          BOT_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # bot identity for the review
         run: |
-          git fetch origin main personal
-          after=$(git rev-parse origin/personal)
-          before="${{ steps.before.outputs.sha }}"
+          git fetch origin personal "$SYNC_BRANCH" 2>/dev/null || true
 
-          if [ "$after" != "$before" ]; then
-            echo "personal advanced ($before -> $after) — Claude pushed the resolved merge."
-            # GITHUB_TOKEN pushes don't fire `on: push`, so kick the build explicitly.
-            gh workflow run build-personal.yml --ref personal || true
-            # Close any stale sync PR now that personal contains main.
-            PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
-            if [ -n "$PR" ]; then
-              gh pr close "$PR" --comment "Resolved automatically by the sync bot and pushed to personal." || true
-            fi
+          if ! git rev-parse --verify "origin/$SYNC_BRANCH" >/dev/null 2>&1; then
+            echo "No $SYNC_BRANCH pushed — Claude did not produce a resolution. Nothing to open."
+            exit 0
+          fi
+          ahead=$(git rev-list --count "origin/personal..origin/$SYNC_BRANCH")
+          if [ "$ahead" -eq 0 ]; then
+            echo "$SYNC_BRANCH has nothing beyond personal — nothing to PR."
             exit 0
           fi
 
-          # Only escalate if personal is genuinely still behind main.
-          behind=$(git rev-list --count origin/personal..origin/main)
-          if [ "$behind" -eq 0 ]; then
-            echo "personal already contains main — nothing to do."
-            exit 0
+          SUMMARY="${{ steps.session.outputs.path }}"
+          [ -f "$SUMMARY" ] || { SUMMARY="$RUNNER_TEMP/summary.md"; echo "Automated upstream sync." > "$SUMMARY"; }
+
+          PR=$(gh pr list --base personal --head "$SYNC_BRANCH" --state open --json number -q '.[0].number')
+          if [ -z "$PR" ]; then
+            URL=$(gh pr create --base personal --head "$SYNC_BRANCH" \
+                    --title "Sync upstream → personal" --body-file "$SUMMARY")
+            PR=$(basename "$URL")
+            echo "Opened PR #$PR"
+          else
+            gh pr edit "$PR" --body-file "$SUMMARY"
+            echo "Updated PR #$PR"
           fi
 
-          echo "Claude did not push a resolution — opening a fallback PR for a human."
-          PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
-          if [ -n "$PR" ]; then
-            echo "Sync PR #$PR already open."
-            exit 0
-          fi
-          BODY="$(mktemp)"
-          cat > "$BODY" <<'EOF'
-          The automated resolver could not merge `main` into `personal` confidently,
-          so it left it for a human.
+          # Record the resolution as a review from the github-actions bot.
+          GH_TOKEN="$BOT_TOKEN" gh pr review "$PR" --comment --body-file "$SUMMARY" || true
 
-          Resolve locally:
-
-          ```
-          git checkout personal
-          git fetch origin
-          git merge origin/main
-          # resolve conflicts, then:
-          git push origin personal
-          ```
-
-          See the latest **Resolve upstream sync** run in the Actions tab for Claude's
-          notes on what it attempted. Merging/pushing updates `personal` and triggers
-          the build.
-          EOF
-          gh pr create --base personal --head main \
-            --title "Sync upstream → personal (needs manual resolution)" \
-            --body-file "$BODY"
+          # Auto-merge once ci-gate passes (branch protection enforces the test gate).
+          gh pr merge "$PR" --auto --merge \
+            || echo "Could not enable auto-merge — verify SYNC_PAT, allow_auto_merge, and branch protection."

@@ -2,11 +2,12 @@ name: Sync from upstream
 
 # Keeps this fork current with Muesli-HQ/muesli:
 #   1. Fast-forwards the fork's pristine `main` to upstream (the "Sync fork" API).
-#   2. Brings the updated `main` into `personal` (your integration branch / default):
-#        - Clean merge  -> pushed straight to `personal` and the build is kicked.
-#        - Conflict     -> opens (or reuses) a PR `main -> personal` to resolve by hand.
+#   2. Brings the updated `main` into `personal` via a tested PR (never a direct push):
+#        - Clean merge  -> pushes `bot/sync-upstream` and opens an auto-merging PR.
+#        - Conflict     -> hands off to resolve-sync.yml (Claude) to resolve + PR.
+# In both cases the PR only merges once CI (`ci-gate`) passes (branch protection).
 # Runs daily and on demand. `main` stays a clean mirror you cut upstream PRs from;
-# `personal` is what CI builds into your app.
+# `personal` is your integration branch / default.
 
 on:
   schedule:
@@ -21,6 +22,9 @@ permissions:
 concurrency:
   group: sync-upstream
   cancel-in-progress: false
+
+env:
+  SYNC_BRANCH: bot/sync-upstream
 
 jobs:
   sync:
@@ -44,9 +48,10 @@ jobs:
             echo "merge-upstream returned non-zero (likely already up to date)"
           fi
 
-      - name: Bring main into personal (auto-merge clean, PR on conflict)
+      - name: Sync into personal via a tested PR (resolver on conflict)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}       # PAT so the PR fires ci.yml
+          BOT_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # bot identity for dispatch/builds
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -57,26 +62,30 @@ jobs:
             echo "personal already contains main — nothing to sync."
             exit 0
           fi
-          echo "personal is $behind commit(s) behind main; attempting merge."
+          echo "personal is $behind commit(s) behind main; building $SYNC_BRANCH."
 
-          # Work on a fresh checkout of personal so the merge is against the pushed tip.
-          git checkout -B personal origin/personal
-
-          if git merge --no-edit origin/main; then
-            git push origin HEAD:personal
-            echo "Clean merge — pushed to personal."
-            # GITHUB_TOKEN pushes don't trigger `on: push`, so kick the build explicitly.
-            gh workflow run build-personal.yml --ref personal || true
-            # A prior conflict PR is now obsolete — close it if one is open.
-            PR=$(gh pr list --base personal --head main --state open --json number -q '.[0].number')
-            if [ -n "$PR" ]; then
-              gh pr close "$PR" --comment "Superseded — upstream now merges cleanly and was synced automatically." || true
-            fi
+          git checkout -B "$SYNC_BRANCH" origin/personal
+          if ! git merge --no-edit origin/main; then
+            git merge --abort
+            echo "Conflict — handing off to the resolver agent (Claude)."
+            GH_TOKEN="$BOT_TOKEN" gh workflow run resolve-sync.yml --ref personal || true
             exit 0
           fi
 
-          git merge --abort
-          echo "Conflict merging main into personal — handing off to the resolver agent."
-          # resolve-sync.yml runs Claude to resolve the conflicts and push personal.
-          # If Claude can't resolve confidently, it opens a fallback PR for a human.
-          gh workflow run resolve-sync.yml --ref personal || true
+          # Clean merge — push the branch and open an auto-merging, test-gated PR.
+          git push --force-with-lease origin "HEAD:$SYNC_BRANCH"
+          BODY="$(mktemp)"
+          printf 'Automated upstream sync — merged **cleanly** (no conflicts). Brings %s upstream commit(s) into `personal`.\n\nAuto-merges once `ci-gate` passes.\n' "$behind" > "$BODY"
+
+          PR=$(gh pr list --base personal --head "$SYNC_BRANCH" --state open --json number -q '.[0].number')
+          if [ -z "$PR" ]; then
+            URL=$(gh pr create --base personal --head "$SYNC_BRANCH" \
+                    --title "Sync upstream → personal" --body-file "$BODY")
+            PR=$(basename "$URL")
+            echo "Opened PR #$PR"
+          else
+            gh pr edit "$PR" --body-file "$BODY"
+            echo "Updated PR #$PR"
+          fi
+          gh pr merge "$PR" --auto --merge \
+            || echo "Could not enable auto-merge — verify SYNC_PAT, allow_auto_merge, and branch protection."
