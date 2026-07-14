@@ -14,6 +14,11 @@ struct ModelsView: View {
     @State private var selectedParakeetModel: String
     @State private var selectedWhisperModel: String
     @State private var showExperimental: Bool
+    @State private var isLiveCaptionModelDownloaded = false
+    @State private var isDownloadingLiveCaptionModel = false
+    @State private var liveCaptionDownloadProgress = 0.0
+    @State private var liveCaptionDownloadTask: Task<Void, Never>?
+    @State private var showDeleteLiveCaptionModelConfirmation = false
 
     // Post-processor state
     @State private var downloadingPostProcModels: Set<String> = []
@@ -29,70 +34,47 @@ struct ModelsView: View {
         let active = appState.selectedBackend
         _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetMultilingual.model)
         _selectedWhisperModel = State(initialValue: BackendOption.whisperFamily.contains(active) ? active.model : BackendOption.whisperSmall.model)
-        _showExperimental = State(initialValue: false)
+        _showExperimental = State(initialValue: appState.activeFeatureTourTarget == .experimentalModels)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-                Text("Models")
-                    .font(MuesliTheme.title1())
-                    .foregroundStyle(MuesliTheme.textPrimary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
+                    Text("Models")
+                        .font(MuesliTheme.title1())
+                        .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Download and manage transcription models. The active model is used for dictation.")
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textSecondary)
+                    Text("Download and manage models for dictation, streaming, and post-processing.")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textSecondary)
 
-                familyCard(
-                    title: "Parakeet Family",
-                    subtitle: "NVIDIA speech models for fast everyday dictation.",
-                    defaultBadge: "Default: v3",
-                    logo: "nvidia-logo",
-                    selection: $selectedParakeetModel,
-                    options: BackendOption.parakeetFamily
-                )
-
-                familyCard(
-                    title: "Whisper",
-                    subtitle: "OpenAI Whisper variants. Runs on Apple Neural Engine via CoreML.",
-                    defaultBadge: "Default: Small",
-                    logo: "openai-logo",
-                    selection: $selectedWhisperModel,
-                    options: BackendOption.whisperFamily
-                )
-
-                modelCard(option: .cohereTranscribe, logo: "cohere-logo")
-
-                modelCard(option: .nemotron35Multilingual, logo: "nvidia-logo")
-
-                experimentalSection
-
-                postProcessorSection
-
-                if !BackendOption.comingSoon.isEmpty {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                        Text("COMING SOON")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                            .textCase(.uppercase)
-                            .padding(.leading, 2)
-                            .padding(.top, MuesliTheme.spacing8)
-
-                        VStack(spacing: MuesliTheme.spacing12) {
-                            ForEach(BackendOption.comingSoon, id: \.model) { option in
-                                comingSoonCard(option: option)
-                            }
+                    Picker("Model category", selection: modelsCategorySelection) {
+                        ForEach(ModelsCategory.allCases) { category in
+                            Text(category.title).tag(category)
                         }
                     }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 520)
+
+                    selectedCategoryContent
                 }
+                .padding(MuesliTheme.spacing32)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(MuesliTheme.spacing32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+                revealFeatureTourTargetIfNeeded(using: proxy)
+            }
+            .onChange(of: activeFeatureTourTarget) { _, target in
+                guard target == .streamingModels || target == .experimentalModels else { return }
+                revealFeatureTourTargetIfNeeded(using: proxy)
+            }
         }
         .background(MuesliTheme.backgroundBase)
         .onAppear {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
+            isLiveCaptionModelDownloaded = MeetingLiveCaptionModelStore.isDownloaded()
             syncSelectionsFromActiveBackend()
             checkNemotron35Update()
         }
@@ -135,6 +117,288 @@ struct ModelsView: View {
         } message: {
             Text("The downloaded model files will be removed from this Mac. You can download the model again later.")
         }
+        .alert(
+            "Delete \"\(MeetingLiveCaptionModelStore.label)\"?",
+            isPresented: $showDeleteLiveCaptionModelConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                deleteLiveCaptionModel()
+            }
+        } message: {
+            Text("Live meetings will fall back to committed VAD-chunk captions until this model is downloaded again.")
+        }
+    }
+
+    private var modelsCategorySelection: Binding<ModelsCategory> {
+        Binding(
+            get: { appState.selectedModelsCategory },
+            set: { appState.selectedModelsCategory = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private var selectedCategoryContent: some View {
+        switch appState.selectedModelsCategory {
+        case .dictation:
+            familyCard(
+                title: "Parakeet Family",
+                subtitle: "NVIDIA speech models for fast everyday dictation.",
+                defaultBadge: "Default: v3",
+                logo: "nvidia-logo",
+                selection: $selectedParakeetModel,
+                options: BackendOption.parakeetFamily
+            )
+
+            familyCard(
+                title: "Whisper",
+                subtitle: "OpenAI Whisper variants. Runs on Apple Neural Engine via CoreML.",
+                defaultBadge: "Default: Small",
+                logo: "openai-logo",
+                selection: $selectedWhisperModel,
+                options: BackendOption.whisperFamily
+            )
+
+            modelCard(option: .cohereTranscribe, logo: "cohere-logo")
+            experimentalSection
+            comingSoonSection
+        case .streaming:
+            streamingSection
+        case .postProcessing:
+            postProcessorSection
+        }
+    }
+
+    @ViewBuilder
+    private var comingSoonSection: some View {
+        if !BackendOption.comingSoon.isEmpty {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("COMING SOON")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .textCase(.uppercase)
+                    .padding(.leading, 2)
+                    .padding(.top, MuesliTheme.spacing8)
+
+                VStack(spacing: MuesliTheme.spacing12) {
+                    ForEach(BackendOption.comingSoon, id: \.model) { option in
+                        comingSoonCard(option: option)
+                    }
+                }
+            }
+        }
+    }
+
+    private var activeFeatureTourTarget: FeatureTourTarget? {
+        appState.activeFeatureTourTarget
+    }
+
+    private func revealFeatureTourTargetIfNeeded(using proxy: ScrollViewProxy) {
+        let target: FeatureTourTarget
+        switch activeFeatureTourTarget {
+        case .streamingModels:
+            target = .streamingModels
+            appState.selectedModelsCategory = .streaming
+        case .experimentalModels:
+            target = .experimentalModels
+            appState.selectedModelsCategory = .dictation
+            showExperimental = true
+        default:
+            return
+        }
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(target.rawValue, anchor: .center)
+        }
+    }
+
+    private var streamingSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text("STREAMING")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+
+                Text("Choose one live meeting transcript model. Nemotron is live + final; Parakeet is live preview only.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            .padding(.leading, 2)
+            .padding(.top, MuesliTheme.spacing8)
+            .id(FeatureTourTarget.streamingModels.rawValue)
+            .featureTourTarget(.streamingModels)
+
+            ForEach(BackendOption.streaming, id: \.model) { option in
+                if let liveCaptionBackend = MeetingLiveCaptionBackend(rawValue: option.backend) {
+                    modelCard(
+                        option: option,
+                        logo: logoForBackend(option),
+                        isActive: appState.config.enableLiveStreamingPartials
+                            && appState.config.resolvedMeetingLiveCaptionBackend == liveCaptionBackend,
+                        onSetActive: {
+                            controller.updateConfig {
+                                $0.meetingLiveCaptionBackend = liveCaptionBackend.rawValue
+                                $0.enableLiveStreamingPartials = true
+                            }
+                        }
+                    )
+                }
+            }
+
+            liveCaptionModelCard
+        }
+    }
+
+    private var liveCaptionModelCard: some View {
+        let isActive = isLiveCaptionModelDownloaded
+            && appState.config.enableLiveStreamingPartials
+            && appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU
+
+        return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                brandLogo("nvidia-logo")
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Text(MeetingLiveCaptionModelStore.label)
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+
+                        Text(MeetingLiveCaptionModelStore.sizeLabel)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                    }
+
+                    Text("Low-latency English preview while a meeting is in progress. A separate meeting model creates the final transcript.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                Spacer()
+
+                if isActive {
+                    Text("Active")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.success)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.success.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                } else if isLiveCaptionModelDownloaded {
+                    Text("Ready")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            if isDownloadingLiveCaptionModel {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: liveCaptionDownloadProgress)
+                        .tint(MuesliTheme.accent)
+                    Text("\(Int(liveCaptionDownloadProgress * 100))% downloading...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                }
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                if isDownloadingLiveCaptionModel {
+                    Button("Cancel") {
+                        liveCaptionDownloadTask?.cancel()
+                        liveCaptionDownloadTask = nil
+                        isDownloadingLiveCaptionModel = false
+                        liveCaptionDownloadProgress = 0
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                } else if isLiveCaptionModelDownloaded {
+                    if !isActive {
+                        Button("Set Active") {
+                            controller.updateConfig {
+                                $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.parakeetRealtimeEOU.rawValue
+                                $0.enableLiveStreamingPartials = true
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, 4)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+
+                    Button {
+                        showDeleteLiveCaptionModelConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.6))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete live caption model")
+                } else {
+                    Button("Download") {
+                        startLiveCaptionModelDownload()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing16)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.6) : MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private func startLiveCaptionModelDownload() {
+        guard !isDownloadingLiveCaptionModel else { return }
+        isDownloadingLiveCaptionModel = true
+        liveCaptionDownloadProgress = 0
+        liveCaptionDownloadTask = Task {
+            do {
+                try await MeetingLiveCaptionModelStore.download { progress in
+                    Task { @MainActor in
+                        liveCaptionDownloadProgress = progress
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                isLiveCaptionModelDownloaded = true
+            } catch is CancellationError {
+                // Cancellation is an expected user action.
+            } catch {
+                fputs("[muesli-native] live caption model download failed: \(error)\n", stderr)
+            }
+            isDownloadingLiveCaptionModel = false
+            liveCaptionDownloadProgress = 0
+            liveCaptionDownloadTask = nil
+        }
+    }
+
+    private func deleteLiveCaptionModel() {
+        do {
+            try MeetingLiveCaptionModelStore.delete()
+            isLiveCaptionModelDownloaded = false
+            if appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU {
+                controller.updateConfig { $0.enableLiveStreamingPartials = false }
+            }
+        } catch {
+            fputs("[muesli-native] live caption model delete failed: \(error)\n", stderr)
+        }
     }
 
     private var experimentalSection: some View {
@@ -154,7 +418,7 @@ struct ModelsView: View {
                                 .foregroundStyle(MuesliTheme.textSecondary)
                         }
 
-                        Text("SenseVoice, Qwen, Indic ASR, and legacy streaming backends. Hidden by default because these are still slower and less polished.")
+                        Text("SenseVoice, Qwen, Indic ASR, and Gemma 4 evaluation backends. Hidden by default because these are still slower and less polished.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .opacity(0.8)
@@ -173,11 +437,21 @@ struct ModelsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .featureTourTarget(.experimentalModels)
 
             if showExperimental {
                 VStack(spacing: MuesliTheme.spacing12) {
                     ForEach(BackendOption.experimental, id: \.model) { option in
-                        modelCard(option: option, logo: logoForBackend(option))
+                        if !appState.selectedPostProcessorBackend.isCompatible(with: option) {
+                            modelCard(
+                                option: option,
+                                logo: logoForBackend(option),
+                                downloadedLabel: "Used for Cleanup",
+                                activationDisabledReason: "Unavailable while Gemma 4 is selected for cleanup. Choose another cleanup backend first."
+                            )
+                        } else {
+                            modelCard(option: option, logo: logoForBackend(option))
+                        }
                     }
                 }
             }
@@ -189,6 +463,7 @@ struct ModelsView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+        .id(FeatureTourTarget.experimentalModels.rawValue)
     }
 
     private var cohereLanguageSelection: Binding<CohereTranscribeLanguage> {
@@ -231,11 +506,36 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             VStack(spacing: MuesliTheme.spacing12) {
+                gemmaCleanupModelCard
+
                 ForEach(PostProcessorOption.all) { option in
                     postProcModelCard(option)
                 }
             }
         }
+    }
+
+    private var gemmaCleanupModelCard: some View {
+        let option = BackendOption.gemma4E2BLiteRT
+        let isDownloaded = downloadedModels.contains(option.model)
+        let isCompatible = TranscriptCleanupBackendOption.gemma4LiteRT
+            .isCompatible(with: appState.selectedBackend)
+
+        return modelCard(
+            option: option,
+            logo: "google-logo",
+            isActive: isDownloaded && appState.selectedPostProcessorBackend == .gemma4LiteRT,
+            onSetActive: {
+                controller.selectPostProcessorBackend(.gemma4LiteRT)
+            },
+            description: "On-device Gemma cleanup for filler removal, formatting, and transcript correction. Shares one download with the experimental Gemma dictation backend.",
+            activeLabel: "Cleanup Active",
+            downloadedLabel: isCompatible ? "Downloaded" : "Used for Dictation",
+            actionTitle: "Use for Cleanup",
+            activationDisabledReason: isCompatible
+                ? nil
+                : "Unavailable while Gemma 4 is selected for dictation. Choose another dictation model first."
+        )
     }
 
     private func postProcModelCard(_ option: PostProcessorOption) -> some View {
@@ -490,7 +790,15 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private func actionButtons(for option: BackendOption, isActive: Bool, isDownloaded: Bool, isDownloading: Bool) -> some View {
+    private func actionButtons(
+        for option: BackendOption,
+        isActive: Bool,
+        isDownloaded: Bool,
+        isDownloading: Bool,
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil,
+        onSetActive: (() -> Void)? = nil
+    ) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
             if isDownloading {
                 Button("Cancel") {
@@ -505,16 +813,22 @@ struct ModelsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             } else if isDownloaded {
                 if !isActive {
-                    Button("Set Active") {
-                        controller.selectBackend(option)
+                    Button(actionTitle) {
+                        if let onSetActive {
+                            onSetActive()
+                        } else {
+                            controller.selectBackend(option)
+                        }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.accent)
+                    .foregroundStyle(activationDisabledReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
-                    .background(MuesliTheme.accentSubtle)
+                    .background(activationDisabledReason == nil ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .disabled(activationDisabledReason != nil)
+                    .help(activationDisabledReason ?? actionTitle)
                 }
 
                 Button {
@@ -541,8 +855,18 @@ struct ModelsView: View {
         }
     }
 
-    private func modelCard(option: BackendOption, logo: String? = nil) -> some View {
-        let isActive = appState.selectedBackend == option
+    private func modelCard(
+        option: BackendOption,
+        logo: String? = nil,
+        isActive activeOverride: Bool? = nil,
+        onSetActive: (() -> Void)? = nil,
+        description: String? = nil,
+        activeLabel: String = "Active",
+        downloadedLabel: String = "Downloaded",
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil
+    ) -> some View {
+        let isActive = activeOverride ?? (appState.selectedBackend == option)
         let isDownloaded = downloadedModels.contains(option.model)
         let isDownloading = downloadingModels.contains(option.model)
         let progress = downloadProgress[option.model] ?? 0
@@ -571,7 +895,7 @@ struct ModelsView: View {
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
 
-                    Text(option.description)
+                    Text(description ?? option.description)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
@@ -580,7 +904,7 @@ struct ModelsView: View {
 
                 // Status badge
                 if isActive {
-                    Text("Active")
+                    Text(activeLabel)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.success)
                         .padding(.horizontal, 8)
@@ -588,7 +912,7 @@ struct ModelsView: View {
                         .background(MuesliTheme.success.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 } else if isDownloaded {
-                    Text("Downloaded")
+                    Text(downloadedLabel)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .padding(.horizontal, 8)
@@ -678,7 +1002,21 @@ struct ModelsView: View {
                 }
             }
 
-            actionButtons(for: option, isActive: isActive, isDownloaded: isDownloaded, isDownloading: isDownloading)
+            if let activationDisabledReason, isDownloaded, !isActive {
+                Label(activationDisabledReason, systemImage: "exclamationmark.lock")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
+            actionButtons(
+                for: option,
+                isActive: isActive,
+                isDownloaded: isDownloaded,
+                isDownloading: isDownloading,
+                actionTitle: actionTitle,
+                activationDisabledReason: activationDisabledReason,
+                onSetActive: onSetActive
+            )
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
@@ -970,8 +1308,11 @@ struct ModelsView: View {
     }
 
     private func deleteModel(_ option: BackendOption) {
-        if option.backend == BackendOption.gemma4E2BLiteRT.backend,
-           appState.selectedPostProcessorBackend == .gemma4LiteRT {
+        if option == .nemotron35Multilingual,
+           appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35 {
+            controller.updateConfig { $0.enableLiveStreamingPartials = false }
+        }
+        if !appState.selectedPostProcessorBackend.isCompatible(with: option) {
             controller.selectPostProcessorBackend(.local)
         }
         if appState.selectedBackend == option {
@@ -1070,7 +1411,7 @@ struct ModelsView: View {
             selectedWhisperModel = active.model
         }
         if BackendOption.experimental.contains(active) {
-            return
+            showExperimental = true
         }
     }
 

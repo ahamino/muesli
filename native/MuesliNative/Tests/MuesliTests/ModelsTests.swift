@@ -51,6 +51,7 @@ struct BackendOptionTests {
         #expect(!BackendOption.nemotron35Multilingual.label.contains("Experimental"))
         #expect(!BackendOption.nemotron35Multilingual.recommended)
         #expect(!BackendOption.experimental.contains(.nemotron35Multilingual))
+        #expect(BackendOption.streaming == [.nemotron35Multilingual])
         #expect(BackendOption.all.contains(.nemotron35Multilingual))
     }
 
@@ -348,6 +349,34 @@ struct PostProcessorOptionTests {
     }
 }
 
+@Suite("TranscriptCleanupBackendOption")
+struct TranscriptCleanupBackendOptionTests {
+
+    @Test("Gemma cleanup is unavailable only for Gemma dictation")
+    func gemmaCleanupCompatibility() {
+        #expect(!TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: .gemma4E2BLiteRT))
+
+        for backend in BackendOption.all where backend != .gemma4E2BLiteRT {
+            #expect(TranscriptCleanupBackendOption.gemma4LiteRT.isCompatible(with: backend))
+        }
+    }
+
+    @Test("Other cleanup backends remain available for Gemma dictation")
+    func otherCleanupBackendsRemainCompatible() {
+        for backend in TranscriptCleanupBackendOption.all where backend != .gemma4LiteRT {
+            #expect(backend.isCompatible(with: .gemma4E2BLiteRT))
+        }
+    }
+
+    @Test("Available cleanup options exclude only conflicting Gemma cleanup")
+    func availableOptionsExcludeGemmaConflict() {
+        let available = TranscriptCleanupBackendOption.available(for: .gemma4E2BLiteRT)
+
+        #expect(!available.contains(.gemma4LiteRT))
+        #expect(available.count == TranscriptCleanupBackendOption.all.count - 1)
+    }
+}
+
 @Suite("SummaryModelPreset")
 struct SummaryModelPresetTests {
 
@@ -570,6 +599,9 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
+        #expect(config.enableLiveStreamingPartials == false)
+        #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
+        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
         #expect(config.dictationHotkey == .default)
         #expect(config.computerUseHotkey == .computerUseDefault)
         #expect(config.enableComputerUseHotkey == false)
@@ -783,6 +815,9 @@ struct AppConfigTests {
         config.postProcessorSystemPrompt = "Preserve labels and quotes."
         config.enableScreenContext = true
         config.enableDictationOCRContext = true
+        config.enableLiveStreamingPartials = true
+        config.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.nemotron35.rawValue
+        config.showMeetingTranscriptOnIndicatorHover = false
         config.contributionPromptNextWordCount = 31_000
         config.contributionPromptNextMeetingCount = 75
         config.contributionGitHubStarClicked = true
@@ -854,6 +889,9 @@ struct AppConfigTests {
         #expect(decoded.postProcessorSystemPrompt == "Preserve labels and quotes.")
         #expect(decoded.enableScreenContext == true)
         #expect(decoded.enableDictationOCRContext == true)
+        #expect(decoded.enableLiveStreamingPartials == true)
+        #expect(decoded.resolvedMeetingLiveCaptionBackend == .nemotron35)
+        #expect(decoded.showMeetingTranscriptOnIndicatorHover == false)
         #expect(decoded.contributionPromptNextWordCount == 31_000)
         #expect(decoded.contributionPromptNextMeetingCount == 75)
         #expect(decoded.contributionGitHubStarClicked == true)
@@ -929,6 +967,8 @@ struct AppConfigTests {
         #expect(json["custom_transcript_cleanup_prompts"] != nil)
         #expect(json["enable_screen_context"] != nil)
         #expect(json["enable_dictation_ocr_context"] != nil)
+        #expect(json["enable_live_streaming_partials"] != nil)
+        #expect(json["show_meeting_transcript_on_indicator_hover"] != nil)
     }
 
     @Test("decodes screen context flags from snake_case")
@@ -998,6 +1038,28 @@ struct AppConfigTests {
         #expect(config.customTranscriptCleanupPrompts.isEmpty)
         #expect(config.enableScreenContext == false)
         #expect(config.enableDictationOCRContext == false)
+        #expect(config.enableLiveStreamingPartials == false)
+        #expect(config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU)
+        #expect(config.showMeetingTranscriptOnIndicatorHover == true)
+    }
+
+    @Test("legacy meeting config preserves its transcription model and leaves streaming off")
+    func legacyMeetingConfigPreservesTranscriptionModel() throws {
+        let json = """
+        {
+          "stt_backend": "fluidaudio",
+          "stt_model": "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+          "has_completed_onboarding": true,
+          "onboarding_use_case": "meetings"
+        }
+        """
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+
+        #expect(config.sttBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.sttModel == BackendOption.parakeetMultilingual.model)
+        #expect(config.meetingTranscriptionBackend == BackendOption.parakeetMultilingual.backend)
+        #expect(config.meetingTranscriptionModel == BackendOption.parakeetMultilingual.model)
+        #expect(config.enableLiveStreamingPartials == false)
     }
 
     @Test("meeting summary retry count is clamped on decode")
