@@ -281,6 +281,9 @@ final class MuesliController: NSObject {
     )
     private lazy var diagnosticIncidentReporter = DiagnosticIncidentReporter(
         appState: appState,
+        automaticPromptEnabled: { [weak self] in
+            self?.config.enableAutomaticDiagnosticIssuePrompts ?? false
+        },
         onPrompt: { [weak self] _ in
             self?.presentHistoryWindow(tab: .about)
         }
@@ -957,6 +960,8 @@ final class MuesliController: NSObject {
         switch step.target {
         case .insightsEntry:
             appState.selectedTab = .dictations
+        case .dictionarySuggestions:
+            appState.selectedTab = .dictionary
         case .meetingsSidebar:
             appState.selectedTab = .meetings
             appState.meetingsNavigationState = .browser
@@ -5710,6 +5715,13 @@ final class MuesliController: NSObject {
 
     func openManualDiagnosticReport() {
         diagnosticIncidentReporter.recordManualReport()
+    }
+
+    func setAutomaticDiagnosticIssuePrompts(_ enabled: Bool) {
+        updateConfig { $0.enableAutomaticDiagnosticIssuePrompts = enabled }
+        if !enabled, appState.pendingDiagnosticIncident?.kind != .manualReport {
+            diagnosticIncidentReporter.dismissCurrentPrompt()
+        }
     }
 
     func dismissDiagnosticIncidentPrompt() {
