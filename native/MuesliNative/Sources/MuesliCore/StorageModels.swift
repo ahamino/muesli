@@ -32,6 +32,34 @@ public enum MeetingSource: String, Codable, Sendable {
     case audioImport = "audio_import"
 }
 
+public enum RecordOriginFilter: String, Codable, CaseIterable, Hashable, Sendable {
+    case all
+    case thisMac
+    case fromIPhone
+
+    public func matches(dictationSource: String) -> Bool {
+        let isFromIPhone = dictationSource
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == MeetingSource.iOS.rawValue
+        return matches(isFromIPhone: isFromIPhone)
+    }
+
+    public func matches(meetingSource: MeetingSource) -> Bool {
+        matches(isFromIPhone: meetingSource == .iOS)
+    }
+
+    private func matches(isFromIPhone: Bool) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .thisMac:
+            return !isFromIPhone
+        case .fromIPhone:
+            return isFromIPhone
+        }
+    }
+}
+
 public enum SyncTextRecordKind: String, Codable, Sendable {
     case dictation
     case meeting

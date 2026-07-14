@@ -332,7 +332,13 @@ public final class DictationStore {
         return sqlite3_last_insert_rowid(db)
     }
 
-    public func recentDictations(limit: Int = 10, offset: Int = 0, fromDate: String? = nil, toDate: String? = nil) throws -> [DictationRecord] {
+    public func recentDictations(
+        limit: Int = 10,
+        offset: Int = 0,
+        fromDate: String? = nil,
+        toDate: String? = nil,
+        origin: RecordOriginFilter = .all
+    ) throws -> [DictationRecord] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
 
@@ -345,6 +351,14 @@ public final class DictationStore {
         if let toDate {
             conditions.append("d.timestamp <= ?")
             boundValues.append(toDate)
+        }
+        switch origin {
+        case .all:
+            break
+        case .thisMac:
+            conditions.append("LOWER(TRIM(COALESCE(d.source, ''))) <> 'ios'")
+        case .fromIPhone:
+            conditions.append("LOWER(TRIM(COALESCE(d.source, ''))) = 'ios'")
         }
         conditions.insert("d.deleted_at IS NULL", at: 0)
         let whereClause = "WHERE " + conditions.joined(separator: " AND ")
@@ -480,9 +494,23 @@ public final class DictationStore {
         return rows
     }
 
-    public func recentMeetings(limit: Int? = nil, folderID: Int64? = nil) throws -> [MeetingRecord] {
+    public func recentMeetings(
+        limit: Int? = nil,
+        folderID: Int64? = nil,
+        origin: RecordOriginFilter = .all
+    ) throws -> [MeetingRecord] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
+
+        let originCondition: String
+        switch origin {
+        case .all:
+            originCondition = ""
+        case .thisMac:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) <> 'ios'"
+        case .fromIPhone:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) = 'ios'"
+        }
 
         var sql: String
         if folderID != nil {
@@ -496,11 +524,11 @@ public final class DictationStore {
                     JOIN folder_tree ft ON mf.parent_id = ft.id
                 )
                 SELECT \(Self.meetingColumns) FROM meetings
-                WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL
+                WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL\(originCondition)
                 ORDER BY id DESC
                 """
         } else {
-            sql = "SELECT \(Self.meetingColumns) FROM meetings WHERE deleted_at IS NULL ORDER BY id DESC"
+            sql = "SELECT \(Self.meetingColumns) FROM meetings WHERE deleted_at IS NULL\(originCondition) ORDER BY id DESC"
         }
         if limit != nil { sql += " LIMIT ?" }
 

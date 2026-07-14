@@ -57,6 +57,7 @@ enum MeetingBrowserLogic {
     static func filteredMeetings(
         from meetings: [MeetingRecord],
         filter: MeetingBrowserFilter,
+        origin: RecordOriginFilter = .all,
         sort: MeetingBrowserSort,
         now: Date = Date(),
         calendar: Calendar = .current
@@ -64,6 +65,7 @@ enum MeetingBrowserLogic {
         presentation(
             from: meetings,
             filter: filter,
+            origin: origin,
             sort: sort,
             now: now,
             calendar: calendar
@@ -73,6 +75,7 @@ enum MeetingBrowserLogic {
     static func presentation(
         from meetings: [MeetingRecord],
         filter: MeetingBrowserFilter,
+        origin: RecordOriginFilter = .all,
         sort: MeetingBrowserSort,
         now: Date = Date(),
         calendar: Calendar = .current
@@ -85,7 +88,8 @@ enum MeetingBrowserLogic {
             if let followUpToID = meeting.followUpToID {
                 meetingIDsWithFollowUps.insert(followUpToID)
             }
-            if isAfterThreshold(meeting, threshold: threshold) {
+            if origin.matches(meetingSource: meeting.source),
+               isAfterThreshold(meeting, threshold: threshold) {
                 filtered.append(meeting)
             }
         }
@@ -204,6 +208,7 @@ struct MeetingsView: View {
         MeetingBrowserLogic.presentation(
             from: scopedMeetings,
             filter: selectedFilter,
+            origin: appState.meetingOriginFilter,
             sort: selectedSort
         )
     }
@@ -569,6 +574,11 @@ struct MeetingsView: View {
             }
 
             browserHeaderMeta(meetingCount: meetingCount)
+
+            RecordOriginPicker(selection: Binding(
+                get: { appState.meetingOriginFilter },
+                set: { controller.filterMeetings(origin: $0) }
+            ))
         }
     }
 
@@ -853,15 +863,11 @@ struct MeetingsView: View {
                 .font(.system(size: 30, weight: .thin))
                 .foregroundStyle(MuesliTheme.textTertiary)
 
-            Text(appState.selectedFolderID == nil ? "No meetings yet" : "No meetings in this folder")
+            Text(emptyStateTitle)
                 .font(MuesliTheme.title3())
                 .foregroundStyle(MuesliTheme.textSecondary)
 
-            Text(
-                appState.selectedFolderID == nil
-                    ? "Start a recording from the menu bar to create your first meeting note."
-                    : "Choose another folder or move a meeting here from the browser."
-            )
+            Text(emptyStateInstruction)
             .font(MuesliTheme.callout())
             .foregroundStyle(MuesliTheme.textTertiary)
             .frame(maxWidth: 320, alignment: .leading)
@@ -874,5 +880,25 @@ struct MeetingsView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerXL)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    private var emptyStateTitle: String {
+        switch appState.meetingOriginFilter {
+        case .thisMac:
+            return "No meetings from this Mac"
+        case .fromIPhone:
+            return "No meetings from iPhone"
+        case .all:
+            return appState.selectedFolderID == nil ? "No meetings yet" : "No meetings in this folder"
+        }
+    }
+
+    private var emptyStateInstruction: String {
+        if appState.meetingOriginFilter != .all || selectedFilter != .all {
+            return "Try another source, time range, or folder."
+        }
+        return appState.selectedFolderID == nil
+            ? "Start a recording from the menu bar to create your first meeting note."
+            : "Choose another folder or move a meeting here from the browser."
     }
 }

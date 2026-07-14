@@ -1022,11 +1022,16 @@ final class MuesliController: NSObject {
             limit: appState.dictationPageSize,
             offset: 0,
             fromDate: appState.dictationFromDate,
-            toDate: appState.dictationToDate
+            toDate: appState.dictationToDate,
+            origin: appState.dictationOriginFilter
         )) ?? []
         appState.dictationRows = rows
         appState.hasMoreDictations = rows.count >= appState.dictationPageSize
-        appState.meetingRows = (try? dictationStore.recentMeetings(limit: 200, folderID: appState.selectedFolderID)) ?? []
+        appState.meetingRows = (try? dictationStore.recentMeetings(
+            limit: 200,
+            folderID: appState.selectedFolderID,
+            origin: appState.meetingOriginFilter
+        )) ?? []
         let counts = (try? dictationStore.meetingCounts()) ?? (total: 0, byFolder: [:], directByFolder: [:])
         appState.totalMeetingCount = counts.total
         appState.meetingCountsByFolder = counts.byFolder
@@ -4324,7 +4329,8 @@ final class MuesliController: NSObject {
             limit: appState.dictationPageSize,
             offset: offset,
             fromDate: appState.dictationFromDate,
-            toDate: appState.dictationToDate
+            toDate: appState.dictationToDate,
+            origin: appState.dictationOriginFilter
         )) ?? []
         appState.dictationRows.append(contentsOf: more)
         appState.hasMoreDictations = more.count >= appState.dictationPageSize
@@ -4341,6 +4347,16 @@ final class MuesliController: NSObject {
     func clearDictationFilter() {
         appState.dictationFromDate = nil
         appState.dictationToDate = nil
+        syncAppState()
+    }
+
+    func filterDictations(origin: RecordOriginFilter) {
+        appState.dictationOriginFilter = origin
+        syncAppState()
+    }
+
+    func filterMeetings(origin: RecordOriginFilter) {
+        appState.meetingOriginFilter = origin
         syncAppState()
     }
 

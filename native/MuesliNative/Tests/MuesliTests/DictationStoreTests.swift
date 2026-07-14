@@ -1048,6 +1048,47 @@ struct DictationStoreTests {
         #expect(try store.textRecordsNeedingSync().isEmpty)
     }
 
+    @Test("recent meetings filter by recording device before limit")
+    func recentMeetingsFilterByOriginBeforeLimit() throws {
+        let store = try makeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_770_000_000)
+
+        try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "meeting-origin-ios",
+            kind: .meeting,
+            title: "iPhone Meeting",
+            text: "Synced transcript",
+            source: "ios",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(60),
+            durationSeconds: 60,
+            wordCount: 2,
+            cloudChangeTag: "tag-origin-ios"
+        ))
+        for index in 0..<2 {
+            let start = startedAt.addingTimeInterval(Double(100 + index * 100))
+            try store.insertMeeting(
+                title: "Mac Meeting \(index)",
+                calendarEventID: nil,
+                startTime: start,
+                endTime: start.addingTimeInterval(60),
+                rawTranscript: "Local transcript",
+                formattedNotes: "Local notes",
+                micAudioPath: nil,
+                systemAudioPath: nil,
+                source: index == 0 ? .meeting : .audioImport
+            )
+        }
+
+        let iPhoneRows = try store.recentMeetings(limit: 1, origin: .fromIPhone)
+        let macRows = try store.recentMeetings(limit: 10, origin: .thisMac)
+
+        #expect(iPhoneRows.map(\.title) == ["iPhone Meeting"])
+        #expect(macRows.map(\.title) == ["Mac Meeting 1", "Mac Meeting 0"])
+    }
+
     @Test("CloudKit expired change token errors are detected")
     func cloudKitExpiredChangeTokenErrorsAreDetected() {
         #expect(MuesliICloudSyncEngine.isChangeTokenExpired(CKError(.changeTokenExpired)))
@@ -1927,6 +1968,47 @@ struct DictationStoreTests {
         let rows = try store.recentDictations(limit: 2)
 
         #expect(rows.map(\.rawText) == ["Newer Mac row", "Older iOS row"])
+    }
+
+    @Test("recent dictations filter by recording device before pagination")
+    func recentDictationsFilterByOriginBeforePagination() throws {
+        let store = try makeStore()
+        let base = Date(timeIntervalSince1970: 1_770_000_000)
+
+        for index in 0..<3 {
+            let end = base.addingTimeInterval(Double(index * 10))
+            _ = try store.insertDictation(
+                text: "Mac \(index)",
+                durationSeconds: 1,
+                source: index == 0 ? "cua" : "dictation",
+                startedAt: end.addingTimeInterval(-1),
+                endedAt: end
+            )
+        }
+        for index in 0..<2 {
+            let end = base.addingTimeInterval(Double(100 + index * 10))
+            try store.upsertSyncedTextRecord(SyncTextRecord(
+                id: "origin-filter-ios-\(index)",
+                kind: .dictation,
+                text: "iPhone \(index)",
+                source: index == 0 ? " iOS " : "ios",
+                createdAt: end,
+                updatedAt: end,
+                startedAt: end.addingTimeInterval(-1),
+                endedAt: end,
+                durationSeconds: 1,
+                wordCount: 2,
+                cloudChangeTag: "tag-\(index)"
+            ))
+        }
+
+        let firstIPhonePage = try store.recentDictations(limit: 1, origin: .fromIPhone)
+        let secondIPhonePage = try store.recentDictations(limit: 1, offset: 1, origin: .fromIPhone)
+        let macRows = try store.recentDictations(limit: 10, origin: .thisMac)
+
+        #expect(firstIPhonePage.map(\.rawText) == ["iPhone 1"])
+        #expect(secondIPhonePage.map(\.rawText) == ["iPhone 0"])
+        #expect(macRows.map(\.rawText) == ["Mac 2", "Mac 1", "Mac 0"])
     }
 
     @Test("recent dictations treats fromDate as a bound value, not SQL")

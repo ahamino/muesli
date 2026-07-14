@@ -115,13 +115,17 @@ struct DictationsView: View {
                 .padding(.bottom, MuesliTheme.spacing12)
             }
 
+            dictationFilterBar
+                .padding(.horizontal, MuesliTheme.spacing24)
+                .padding(.bottom, MuesliTheme.spacing12)
+
             if appState.dictationRows.isEmpty {
                 Spacer()
                 VStack(spacing: MuesliTheme.spacing12) {
                     Image(systemName: "mic.badge.plus")
                         .font(.system(size: 40, weight: .thin))
                         .foregroundStyle(MuesliTheme.textTertiary)
-                    Text("No dictations yet")
+                    Text(emptyStateTitle)
                         .font(MuesliTheme.title3())
                         .foregroundStyle(MuesliTheme.textSecondary)
                     Text(emptyStateInstruction)
@@ -132,20 +136,13 @@ struct DictationsView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing20) {
-                        ForEach(Array(groupedDictations.enumerated()), id: \.element.header) { index, group in
+                        ForEach(groupedDictations, id: \.header) { group in
                             VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
                                 HStack {
                                     Text(group.header)
                                         .font(.system(size: 12, weight: .semibold))
                                         .foregroundStyle(MuesliTheme.textTertiary)
                                         .padding(.leading, MuesliTheme.spacing4)
-
-                                    Spacer()
-
-                                    // Filter button on the first group header
-                                    if index == 0 {
-                                        dateFilterButton
-                                    }
                                 }
 
                                 VStack(spacing: 1) {
@@ -455,9 +452,31 @@ struct DictationsView: View {
     }
 
     private var emptyStateInstruction: String {
-        appState.config.resolvedOnboardingUseCase.includesVoiceNotes
+        if appState.dictationOriginFilter != .all || selectedFilter != .all {
+            return "Try another source or time range"
+        }
+        return appState.config.resolvedOnboardingUseCase.includesVoiceNotes
             ? "Click Record Voice Note to capture your first note"
             : "Hold \(appState.config.dictationHotkey.label) to start dictating"
+    }
+
+    private var emptyStateTitle: String {
+        switch appState.dictationOriginFilter {
+        case .all: return "No dictations yet"
+        case .thisMac: return "No dictations from this Mac"
+        case .fromIPhone: return "No dictations from iPhone"
+        }
+    }
+
+    private var dictationFilterBar: some View {
+        HStack(spacing: MuesliTheme.spacing12) {
+            RecordOriginPicker(selection: Binding(
+                get: { appState.dictationOriginFilter },
+                set: { controller.filterDictations(origin: $0) }
+            ))
+            Spacer(minLength: 0)
+            dateFilterButton
+        }
     }
 
     private var voiceNoteButton: some View {
