@@ -244,6 +244,47 @@ struct DictationAudioRouteControllerTests {
         #expect(controller.meetingInputRouteSnapshot().preferredInputDeviceID == 82)
     }
 
+    @Test("meeting route cache follows selected microphone unplug and reconnect")
+    func meetingRouteCacheFollowsSelectedMicrophoneHotPlug() {
+        let inspector = FakeCoreAudioDeviceInspector(
+            defaultOutputDeviceID: 10,
+            outputRouteKind: .speakerLike,
+            defaultInputDeviceID: 82,
+            builtInInputDeviceID: 82,
+            inputDevices: [
+                AudioInputDeviceInfo(uid: "external-mic", name: "External Mic", deviceID: 91, isBuiltIn: false),
+                AudioInputDeviceInfo(uid: "built-in-mic", name: "MacBook Microphone", deviceID: 82, isBuiltIn: true),
+            ]
+        )
+        let routeQueue = DispatchQueue(label: "test.dictation-audio-route.selected-input-hot-plug")
+        let controller = DictationAudioRouteController(
+            inspector: inspector,
+            queue: routeQueue,
+            observesDefaultOutputChanges: false
+        )
+        controller.selectedInputDeviceUID = "external-mic"
+        routeQueue.sync {}
+
+        #expect(controller.preferredInputDeviceIDForMeeting() == 91)
+        #expect(controller.meetingInputRouteSnapshot().selectedInputDeviceResolved)
+
+        inspector.inputDevices.removeAll { $0.uid == "external-mic" }
+        controller.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
+        routeQueue.sync {}
+
+        #expect(controller.preferredInputDeviceIDForMeeting() == nil)
+        #expect(!controller.meetingInputRouteSnapshot().selectedInputDeviceResolved)
+
+        inspector.inputDevices.append(
+            AudioInputDeviceInfo(uid: "external-mic", name: "External Mic", deviceID: 92, isBuiltIn: false)
+        )
+        controller.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
+        routeQueue.sync {}
+
+        #expect(controller.preferredInputDeviceIDForMeeting() == 92)
+        #expect(controller.meetingInputRouteSnapshot().selectedInputDeviceResolved)
+    }
+
     @Test("unavailable selected microphone falls back to automatic route policy")
     func unavailableSelectedMicrophoneFallsBackToAutomaticRoutePolicy() {
         let inspector = FakeCoreAudioDeviceInspector(

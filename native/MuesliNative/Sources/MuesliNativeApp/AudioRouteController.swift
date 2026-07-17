@@ -168,6 +168,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     private var selectedInputDeviceUIDStorage: String?
     private var defaultOutputListener: AudioObjectPropertyListenerBlock?
     private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var deviceInventoryListener: AudioObjectPropertyListenerBlock?
     private var onPreferredInputDeviceChangedStorage: ((AudioObjectID?) -> Void)?
     var selectedInputDeviceUID: String? {
         get {
@@ -209,6 +210,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
         if observesDefaultOutputChanges {
             installDefaultOutputListener()
             installDefaultInputListener()
+            installDeviceInventoryListener()
         }
         refreshRouteCache()
     }
@@ -230,6 +232,15 @@ final class DictationAudioRouteController: DictationAudioRouting {
                 &address,
                 queue,
                 defaultInputListener
+            )
+        }
+        if let deviceInventoryListener {
+            var address = Self.deviceInventoryAddress()
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                queue,
+                deviceInventoryListener
             )
         }
     }
@@ -423,6 +434,25 @@ final class DictationAudioRouteController: DictationAudioRouting {
         }
     }
 
+    private func installDeviceInventoryListener() {
+        var address = Self.deviceInventoryAddress()
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // A selected non-default microphone can disappear or return without
+            // changing either system-default device. Refresh its UID resolution
+            // so meeting startup never consumes a stale AudioObjectID.
+            self?.refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            queue,
+            listener
+        )
+        if status == noErr {
+            deviceInventoryListener = listener
+        }
+    }
+
     private static func defaultOutputDeviceAddress() -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -434,6 +464,14 @@ final class DictationAudioRouteController: DictationAudioRouting {
     private static func defaultInputDeviceAddress() -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private static func deviceInventoryAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
