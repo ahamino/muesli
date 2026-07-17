@@ -154,6 +154,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
         var defaultInputDeviceID: AudioObjectID?
         var selectedInputDeviceID: AudioObjectID?
         var inputDeviceNamesByID: [AudioObjectID: String] = [:]
+        var inputDeviceIDsByUID: [String: AudioObjectID] = [:]
 
         var systemDefaultInputIsBuiltIn: Bool {
             guard let defaultInputDeviceID, let builtInInputDeviceID else { return false }
@@ -177,7 +178,15 @@ final class DictationAudioRouteController: DictationAudioRouting {
         }
         set {
             let normalized = newValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            lock.withLock { selectedInputDeviceUIDStorage = normalized?.isEmpty == false ? normalized : nil }
+            let selectedInputDeviceUID = normalized?.isEmpty == false ? normalized : nil
+            lock.withLock {
+                // Meeting startup only reads this cache, so apply a known
+                // selection before its asynchronous CoreAudio verification.
+                selectedInputDeviceUIDStorage = selectedInputDeviceUID
+                snapshot.selectedInputDeviceID = selectedInputDeviceUID.flatMap {
+                    snapshot.inputDeviceIDsByUID[$0]
+                }
+            }
             refreshRouteCache(notifyEvenIfPreferredUnchanged: true)
         }
     }
@@ -254,12 +263,9 @@ final class DictationAudioRouteController: DictationAudioRouting {
         queue.async { [weak self] in
             guard let self else { return }
             let next = self.makeRouteSnapshot(refreshingDeviceNames: true)
-            let previousPreferredInputDeviceID = self.lock.withLock { () -> AudioObjectID? in
-                let previous = self.snapshot
-                self.snapshot = next
-                return Self.preferredInputDeviceID(for: previous)
-            }
-            let preferredInputDeviceID = Self.preferredInputDeviceID(for: next)
+            let routeChange = self.replaceRouteSnapshot(next)
+            let previousPreferredInputDeviceID = routeChange.previousPreferredInputDeviceID
+            let preferredInputDeviceID = routeChange.preferredInputDeviceID
             if notifyEvenIfPreferredUnchanged || previousPreferredInputDeviceID != preferredInputDeviceID {
                 let handler = self.onPreferredInputDeviceChanged
                 handler?(preferredInputDeviceID)
@@ -270,9 +276,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     func preferredInputDeviceIDForDictation() -> AudioObjectID? {
         syncOnRouteQueue {
             let next = makeRouteSnapshot()
-            lock.withLock {
-                snapshot = next
-            }
+            replaceRouteSnapshot(next)
         }
         return Self.preferredInputDeviceID(for: lock.withLock { snapshot })
     }
@@ -294,9 +298,12 @@ final class DictationAudioRouteController: DictationAudioRouting {
         // the lock-protected cache is intentionally the only work performed
         // here: both queue.sync and inspector calls can wedge behind CoreAudio
         // and freeze the prompt, status item, and recording controls.
-        let current = lock.withLock { snapshot }
+        let cachedRoute = lock.withLock {
+            (snapshot: snapshot, selectedInputDeviceUID: selectedInputDeviceUIDStorage)
+        }
+        let current = cachedRoute.snapshot
         let preferredInputDeviceID = Self.preferredMeetingInputDeviceID(for: current)
-        let selectedInputDeviceUID = lock.withLock { selectedInputDeviceUIDStorage }
+        let selectedInputDeviceUID = cachedRoute.selectedInputDeviceUID
         return MeetingMicRouteDiagnosticsSnapshot(
             outputRouteKind: current.outputRouteKind.description,
             outputIsAmbiguousBluetooth: current.outputIsAmbiguousBluetooth,
@@ -341,9 +348,7 @@ final class DictationAudioRouteController: DictationAudioRouting {
     func refreshRouteAfterDictationSession() {
         syncOnRouteQueue {
             let current = makeRouteSnapshot()
-            lock.withLock {
-                snapshot = current
-            }
+            replaceRouteSnapshot(current)
         }
     }
 
@@ -384,29 +389,67 @@ final class DictationAudioRouteController: DictationAudioRouting {
 
     private func makeRouteSnapshot(refreshingDeviceNames: Bool = false) -> RouteSnapshot {
         let outputClassification = currentOutputRouteClassification()
-        let selectedInputDeviceUID = lock.withLock { selectedInputDeviceUIDStorage }
-        let cachedInputDeviceNames = lock.withLock { snapshot.inputDeviceNamesByID }
-        let inputDevices = refreshingDeviceNames ? inspector.availableInputDevices() : nil
-        let selectedInputDeviceID = selectedInputDeviceUID.flatMap { uid in
-            if let inputDevices {
-                return inputDevices.first(where: { $0.uid == uid })?.deviceID
-            }
-            return inspector.inputDeviceID(matchingUID: uid)
+        let cachedRoute = lock.withLock {
+            (
+                selectedInputDeviceUID: selectedInputDeviceUIDStorage,
+                inputDeviceNamesByID: snapshot.inputDeviceNamesByID,
+                inputDeviceIDsByUID: snapshot.inputDeviceIDsByUID
+            )
         }
+        let inputDevices = refreshingDeviceNames ? inspector.availableInputDevices() : nil
         let inputDeviceNamesByID = inputDevices.map { devices in
             Dictionary(
                 devices.map { ($0.deviceID, $0.name) },
                 uniquingKeysWith: { first, _ in first }
             )
-        } ?? cachedInputDeviceNames
+        } ?? cachedRoute.inputDeviceNamesByID
+        var inputDeviceIDsByUID = inputDevices.map { devices in
+            Dictionary(
+                devices.map { ($0.uid, $0.deviceID) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        } ?? cachedRoute.inputDeviceIDsByUID
+        let selectedInputDeviceID = cachedRoute.selectedInputDeviceUID.flatMap { uid -> AudioObjectID? in
+            if inputDevices != nil {
+                return inputDeviceIDsByUID[uid]
+            }
+            let deviceID = inspector.inputDeviceID(matchingUID: uid)
+            if let deviceID {
+                inputDeviceIDsByUID[uid] = deviceID
+            } else {
+                inputDeviceIDsByUID.removeValue(forKey: uid)
+            }
+            return deviceID
+        }
         return RouteSnapshot(
             outputRouteKind: outputClassification.kind,
             outputIsAmbiguousBluetooth: outputClassification.isAmbiguousBluetooth,
             builtInInputDeviceID: inspector.builtInInputDeviceID(),
             defaultInputDeviceID: inspector.defaultInputDeviceID(),
             selectedInputDeviceID: selectedInputDeviceID,
-            inputDeviceNamesByID: inputDeviceNamesByID
+            inputDeviceNamesByID: inputDeviceNamesByID,
+            inputDeviceIDsByUID: inputDeviceIDsByUID
         )
+    }
+
+    @discardableResult
+    private func replaceRouteSnapshot(
+        _ next: RouteSnapshot
+    ) -> (previousPreferredInputDeviceID: AudioObjectID?, preferredInputDeviceID: AudioObjectID?) {
+        lock.withLock {
+            let previousPreferredInputDeviceID = Self.preferredInputDeviceID(for: snapshot)
+            var reconciled = next
+            // CoreAudio inspection can outlive a selection change. Resolve the
+            // latest UID against the candidate's freshly populated inventory.
+            reconciled.selectedInputDeviceID = selectedInputDeviceUIDStorage.flatMap {
+                reconciled.inputDeviceIDsByUID[$0]
+            }
+            snapshot = reconciled
+            return (
+                previousPreferredInputDeviceID,
+                Self.preferredInputDeviceID(for: reconciled)
+            )
+        }
     }
 
     private func currentOutputRouteClassification() -> AudioRouteClassifier.Classification {
