@@ -15,7 +15,9 @@ APP_BUNDLE_NAME="${MUESLI_APP_BUNDLE_NAME:-$APP_NAME.app}"
 APP_EXECUTABLE_NAME="${MUESLI_EXECUTABLE_NAME:-Muesli}"
 APP_SUPPORT_DIR_NAME="${MUESLI_SUPPORT_DIR_NAME:-$APP_DISPLAY_NAME}"
 BUNDLE_ID="${MUESLI_BUNDLE_ID:-com.muesli.app}"
-DEFAULT_APP_VERSION="0.7.1"
+TELEMETRYDECK_APP_ID="${MUESLI_TELEMETRYDECK_APP_ID:-}"
+TELEMETRY_CHANNEL="${MUESLI_TELEMETRY_CHANNEL:-unconfigured}"
+DEFAULT_APP_VERSION="0.8.0"
 APP_VERSION="${MUESLI_BUILD_VERSION:-$DEFAULT_APP_VERSION}"
 APP_BUNDLE_VERSION="${MUESLI_BUNDLE_VERSION:-$APP_VERSION}"
 APP_SHORT_VERSION="${MUESLI_SHORT_VERSION:-$APP_VERSION}"
@@ -30,6 +32,46 @@ PROVISIONING_PROFILE="${MUESLI_PROVISIONING_PROFILE:-}"
 CODESIGN_TIMESTAMP="${MUESLI_CODESIGN_TIMESTAMP:---timestamp}"
 if [[ "$CODESIGN_TIMESTAMP" == "none" ]]; then
   CODESIGN_TIMESTAMP="--timestamp=none"
+fi
+BUNDLE_THIN_ARCH="${MUESLI_BUNDLE_THIN_ARCH:-arm64}"
+
+thin_macho_to_bundle_arch() {
+  local binary="$1"
+  [[ -n "$BUNDLE_THIN_ARCH" ]] || return 0
+  [[ -f "$binary" ]] || return 0
+
+  local info
+  info="$(lipo -info "$binary" 2>/dev/null || true)"
+  [[ "$info" == *"Architectures in the fat file"* ]] || return 0
+  [[ "$info" == *" $BUNDLE_THIN_ARCH"* ]] || {
+    echo "Warning: $binary does not contain $BUNDLE_THIN_ARCH; leaving universal binary unchanged." >&2
+    return 0
+  }
+
+  local tmp="${binary}.thin"
+  lipo "$binary" -thin "$BUNDLE_THIN_ARCH" -output "$tmp"
+  chmod +x "$tmp"
+  mv "$tmp" "$binary"
+}
+
+if [[ -n "$TELEMETRYDECK_APP_ID" && ! "$TELEMETRYDECK_APP_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+  echo "Invalid MUESLI_TELEMETRYDECK_APP_ID: expected a UUID." >&2
+  exit 2
+fi
+case "$TELEMETRY_CHANNEL" in
+  production|preprod|dev|canary|unconfigured) ;;
+  *)
+    echo "Invalid MUESLI_TELEMETRY_CHANNEL: $TELEMETRY_CHANNEL" >&2
+    exit 2
+    ;;
+esac
+if [[ -n "$TELEMETRYDECK_APP_ID" && "$TELEMETRY_CHANNEL" == "unconfigured" ]]; then
+  echo "MUESLI_TELEMETRY_CHANNEL is required when telemetry is enabled." >&2
+  exit 2
+fi
+if [[ -z "$TELEMETRYDECK_APP_ID" && "$TELEMETRY_CHANNEL" != "unconfigured" ]]; then
+  echo "MUESLI_TELEMETRYDECK_APP_ID is required for channel $TELEMETRY_CHANNEL." >&2
+  exit 2
 fi
 
 SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG")
@@ -84,6 +126,15 @@ for framework in "$BIN_DIR"/*.framework; do
   ditto "$framework" "$STAGED_APP_DIR/Contents/MacOS/$(basename "$framework")"
 done
 
+# Bundle SwiftPM-linked loose dynamic libraries, including binary targets that
+# ship as dylibs instead of frameworks.
+for dylib in "$BIN_DIR"/*.dylib; do
+  [[ -f "$dylib" ]] || continue
+  target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
+  cp -RL "$dylib" "$target"
+  thin_macho_to_bundle_arch "$target"
+done
+
 # Bundle SPM resource bundles (CoreML models, privacy manifests, etc.)
 for bundle in "$BIN_DIR"/*.bundle; do
   [[ -d "$bundle" ]] || continue
@@ -94,7 +145,9 @@ done
 LOCALVQE_LIB_DIR="${MUESLI_LOCALVQE_LIB_DIR:-$ROOT/native/MuesliNative/LocalVQE/lib}"
 if [[ -d "$LOCALVQE_LIB_DIR" ]]; then
   find "$LOCALVQE_LIB_DIR" -maxdepth 1 \( -name "liblocalvqe*.dylib" -o -name "libggml*.dylib" -o -name "libggml*.so" \) \( -type f -o -type l \) | while read -r dylib; do
-    cp -P "$dylib" "$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
+    target="$STAGED_APP_DIR/Contents/MacOS/$(basename "$dylib")"
+    cp -RL "$dylib" "$target"
+    thin_macho_to_bundle_arch "$target"
   done
 fi
 LOCALVQE_MODEL_PATH="${MUESLI_LOCALVQE_MODEL_PATH:-$ROOT/native/MuesliNative/LocalVQE/models/localvqe-v1.2-1.3M-f32.gguf}"
@@ -115,8 +168,11 @@ cp "$ROOT/assets/OpenAI_Logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/openai
 cp "$ROOT/assets/cohere.png" "$STAGED_APP_DIR/Contents/Resources/cohere-logo.png"
 cp "$ROOT/assets/Qwen_logo.svg.png" "$STAGED_APP_DIR/Contents/Resources/qwen-logo.png"
 cp "$ROOT/assets/AI4Bharat_logo.png" "$STAGED_APP_DIR/Contents/Resources/ai4bharat-logo.png"
+cp "$ROOT/assets/google-logo.svg" "$STAGED_APP_DIR/Contents/Resources/google-logo.svg"
 cp "$ROOT/assets/x-logo.png" "$STAGED_APP_DIR/Contents/Resources/x-logo.png"
 cp "$ROOT/assets/linkedin-logo.png" "$STAGED_APP_DIR/Contents/Resources/linkedin-logo.png"
+cp "$ROOT/assets/insights-share-background.png" "$STAGED_APP_DIR/Contents/Resources/insights-share-background.png"
+cp "$ROOT/assets/muesli_app_icon.png" "$STAGED_APP_DIR/Contents/Resources/muesli_app_icon.png"
 if [[ -d "$ROOT/assets/fonts" ]]; then
   ditto "$ROOT/assets/fonts" "$STAGED_APP_DIR/Contents/Resources/fonts"
 fi
@@ -147,6 +203,10 @@ cat > "$STAGED_APP_DIR/Contents/Info.plist" <<PLIST
   <string>muesli.icns</string>
   <key>MuesliSupportDirectoryName</key>
   <string>$APP_SUPPORT_DIR_NAME</string>
+  <key>MuesliTelemetryDeckAppID</key>
+  <string>$TELEMETRYDECK_APP_ID</string>
+  <key>MuesliTelemetryChannel</key>
+  <string>$TELEMETRY_CHANNEL</string>
   <key>LSUIElement</key>
   <true/>
   <key>LSMinimumSystemVersion</key>
@@ -179,6 +239,10 @@ fi
 mkdir -p "$INSTALL_DIR"
 rm -rf "$APP_DIR"
 ditto "$STAGED_APP_DIR" "$APP_DIR"
+
+# Checkouts under cloud-synced folders (OneDrive/Dropbox) tag files with Finder
+# metadata that codesign rejects as detritus; strip it before signing.
+xattr -cr "$APP_DIR" 2>/dev/null || true
 
 if [[ "$SKIP_SIGN" != "1" ]]; then
   if ! security find-identity -v -p codesigning | grep -Fq "$SIGN_IDENTITY"; then
@@ -219,9 +283,9 @@ if [[ "$SKIP_SIGN" != "1" ]]; then
       "$framework"
   done
 
-  # Sign loose native runtime libraries loaded via dlopen. Hardened runtime
-  # library validation requires these to have the same Team ID as the app.
-  find "$APP_DIR/Contents/MacOS" -maxdepth 1 \( -name "liblocalvqe*.dylib" -o -name "libggml*.dylib" -o -name "libggml*.so" \) -type f | while read -r library; do
+  # Sign loose native runtime libraries. Hardened runtime library validation
+  # requires these to have the same Team ID as the app.
+  find "$APP_DIR/Contents/MacOS" -maxdepth 1 \( -name "*.dylib" -o -name "*.so" \) -type f | while read -r library; do
     if file "$library" | grep -q "Mach-O"; then
       codesign --force --options runtime "$CODESIGN_TIMESTAMP" \
         --sign "$SIGN_IDENTITY" \

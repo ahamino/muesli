@@ -9,6 +9,7 @@ final class DiagnosticIncidentReporter {
     private let defaults: UserDefaults
     private let appState: AppState
     private let telemetrySink: TelemetrySink
+    private let automaticPromptEnabled: @MainActor () -> Bool
     private let onPrompt: PromptHandler
     private let calendar: Calendar
 
@@ -17,12 +18,14 @@ final class DiagnosticIncidentReporter {
         defaults: UserDefaults = .standard,
         calendar: Calendar = .current,
         telemetrySink: @escaping TelemetrySink = DiagnosticIncidentReporter.sendTelemetry,
+        automaticPromptEnabled: @escaping @MainActor () -> Bool = { false },
         onPrompt: @escaping PromptHandler = { _ in }
     ) {
         self.appState = appState
         self.defaults = defaults
         self.calendar = calendar
         self.telemetrySink = telemetrySink
+        self.automaticPromptEnabled = automaticPromptEnabled
         self.onPrompt = onPrompt
     }
 
@@ -30,7 +33,7 @@ final class DiagnosticIncidentReporter {
     func record(
         kind: DiagnosticIncidentKind,
         severity: DiagnosticIncidentSeverity = .error,
-        stage: String,
+        stage: DiagnosticIncidentStage,
         backend: BackendOption? = nil,
         error: Error? = nil,
         promptUser: Bool = true
@@ -43,7 +46,7 @@ final class DiagnosticIncidentReporter {
             error: error
         )
         telemetrySink(incident)
-        if promptUser, shouldPrompt(for: incident) {
+        if promptUser, automaticPromptEnabled(), shouldPrompt(for: incident) {
             markPrompted(for: incident)
             onPrompt(incident)
             appState.pendingDiagnosticIncident = incident
@@ -55,8 +58,8 @@ final class DiagnosticIncidentReporter {
         let incident = DiagnosticIncident(
             kind: .manualReport,
             severity: .info,
-            stage: "manual_report",
-            backend: nil,
+            stage: .manualReport,
+            backendOption: nil,
             error: nil
         )
         appState.pendingDiagnosticIncident = incident
@@ -85,6 +88,12 @@ final class DiagnosticIncidentReporter {
     }
 
     private static func sendTelemetry(_ incident: DiagnosticIncident) {
-        TelemetryDeck.signal("TelemetryDeck.Error.occurred", parameters: incident.telemetryParameters)
+        let category: ErrorCategory = incident.telemetryCategory == .appState ? .appState : .thrownException
+        TelemetryDeck.errorOccurred(
+            id: incident.telemetryErrorID,
+            category: category,
+            message: nil,
+            parameters: incident.telemetryParameters
+        )
     }
 }
