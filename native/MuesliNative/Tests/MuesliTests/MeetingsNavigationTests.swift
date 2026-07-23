@@ -65,6 +65,28 @@ struct MeetingsNavigationTests {
         #expect(appState.selectedMeeting == nil)
     }
 
+    @Test("each dashboard statistic opens insights with its originating section")
+    func dashboardStatisticsOpenInsights() {
+        let controller = makeController()
+
+        for section in InsightsSection.allCases {
+            controller.openInsights(section: section)
+            #expect(controller.appState.selectedTab == .insights)
+            #expect(controller.appState.insightsInitialSection == section)
+        }
+    }
+
+    @Test("closing insights returns to dictations")
+    func closingInsightsReturnsToDictations() {
+        let controller = makeController()
+        controller.openInsights(section: .meetings)
+
+        controller.closeInsights()
+
+        #expect(controller.appState.selectedTab == .dictations)
+        #expect(controller.appState.insightsInitialSection == .meetings)
+    }
+
     @Test("discard confirmation maps checkbox selections to meeting discard resolutions")
     func discardConfirmationResolutionMapping() {
         #expect(
@@ -1103,6 +1125,41 @@ struct MeetingsNavigationTests {
         #expect(controller.appState.config.meetingTranscriptionModel == BackendOption.whisperLargeTurbo.model)
     }
 
+    @Test("selecting Gemma dictation replaces conflicting Gemma cleanup")
+    func selectingGemmaDictationReplacesGemmaCleanup() {
+        let controller = makeController()
+        controller.selectPostProcessorBackend(.gemma4LiteRT)
+
+        #expect(controller.appState.selectedPostProcessorBackend == .gemma4LiteRT)
+
+        controller.selectBackend(.gemma4E2BLiteRT)
+
+        #expect(controller.appState.selectedBackend == .gemma4E2BLiteRT)
+        #expect(controller.appState.selectedPostProcessorBackend == .local)
+        #expect(controller.appState.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
+    }
+
+    @Test("startup repairs a persisted Gemma dictation and cleanup conflict")
+    func startupRepairsPersistedGemmaConflict() {
+        let configStore = ConfigStore(supportDirectory: makeSupportDirectory())
+        var config = AppConfig()
+        config.sttBackend = BackendOption.gemma4E2BLiteRT.backend
+        config.sttModel = BackendOption.gemma4E2BLiteRT.model
+        config.postProcessorBackend = TranscriptCleanupBackendOption.gemma4LiteRT.backend
+        config.enablePostProcessor = true
+        configStore.save(config)
+        let persistedConfig = configStore.load()
+        #expect(persistedConfig.sttBackend == BackendOption.gemma4E2BLiteRT.backend)
+        #expect(persistedConfig.sttModel == BackendOption.gemma4E2BLiteRT.model)
+
+        let controller = makeController(configStore: configStore)
+
+        #expect(controller.selectedPostProcessorBackend == .local)
+        #expect(controller.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
+        #expect(!controller.config.enablePostProcessor)
+        #expect(controller.selectedBackend == .gemma4E2BLiteRT)
+    }
+
     @Test("updateConfig persists normalized meeting transcription backend")
     func updateConfigPersistsNormalizedMeetingTranscriptionBackend() {
         let controller = makeController()
@@ -1254,7 +1311,11 @@ struct MeetingBrowserLogicTests {
     private func makeMeeting(id: Int64, daysAgo: Int, title: String) -> MeetingRecord {
         let now = Date(timeIntervalSince1970: 1_710_000_000)
         let calendar = Calendar(identifier: .gregorian)
-        return makeMeeting(id: id, rawDate: Self.isoDate(daysAgo: daysAgo, now: now, calendar: calendar), title: title)
+        return makeMeeting(
+            id: id,
+            rawDate: Self.isoDate(daysAgo: daysAgo, now: now, calendar: calendar),
+            title: title
+        )
     }
 
     private func makeMeeting(id: Int64, rawDate: String, title: String) -> MeetingRecord {
